@@ -1,0 +1,27 @@
+# LiveKit dependencies
+livekit
+livekit-agents
+livekit-plugins-elevenlabs
+
+# HTTP server
+aiohttp
+
+# Environment variables
+python-dotenv
+
+# Redis client
+redis[hiredis]>=5.0.0
+
+
+# TTS
+pyttsx3
+
+# Image Generation
+google-genai
+
+# Web Search (optional - improves DuckDuckGo search results)
+duckduckgo-search
+
+# MongoDB
+pymongo>=4.0.0
+certifi
