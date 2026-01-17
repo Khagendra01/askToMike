@@ -1,0 +1,39 @@
+{
+  "name": "my-stagehand-app",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx index.ts",
+    "linkedin-post": "tsx linkedin_post.ts",
+    "linkedin-comment": "tsx linkedin_comment.ts",
+    "linkedin-message-reply": "tsx linkedin_message_reply.ts",
+    "linkedin-message-explore": "tsx linkedin_message_explore.ts",
+    "linkedin-modify-post": "tsx linkedin_modify_post.ts",
+    "linkedin-parallel": "concurrently -n \"comment,explore\" -c \"blue,green\" \"cross-env SESSION_NAME=linkedin-comment npm run linkedin-comment\" \"cross-env SESSION_NAME=linkedin-explore npm run linkedin-message-explore\"",
+    "linkedin-all": "concurrently -n \"comment,explore,reply\" -c \"blue,green,yellow\" \"cross-env SESSION_NAME=linkedin-comment npm run linkedin-comment\" \"cross-env SESSION_NAME=linkedin-explore npm run linkedin-message-explore\" \"cross-env SESSION_NAME=linkedin-reply npm run linkedin-message-reply\"",
+    "linkedin-engagement": "concurrently -n \"comment,explore\" -c \"blue,green\" \"cross-env SESSION_NAME=linkedin-comment npm run linkedin-comment\" \"cross-env SESSION_NAME=linkedin-explore npm run linkedin-message-explore\"",
+    "linkedin-messaging": "concurrently -n \"explore,reply\" -c \"green,yellow\" \"cross-env SESSION_NAME=linkedin-explore npm run linkedin-message-explore\" \"cross-env SESSION_NAME=linkedin-reply npm run linkedin-message-reply\"",
+    "copy-sessions": "node copy-sessions.js",
+    "login-session": "tsx login-session.ts",
+    "tool-server": "tsx comment_decision_tool.ts",
+    "test-tool": "tsx test_decision_tool.ts",
+    "test-tool-simple": "tsx test_tool_simple.ts",
+    "redis-worker": "tsx redis_worker.ts",
+    "chat": "tsx conversational_llm.ts",
+    "test-conversation": "tsx test_llm_conversation.ts"
+  },
+  "dependencies": {
+    "@browserbasehq/sdk": "latest",
+    "@browserbasehq/stagehand": "latest",
+    "dotenv": "^16.4.7",
+    "playwright-core": "^1.48.0",
+    "redis": "^4.7.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "cross-env": "^10.1.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.0.0"
+  }
+}
