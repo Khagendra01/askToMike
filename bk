@@ -1,0 +1,782 @@
+"""
+LiveKit Agent Server with LinkedIn Post Integration
+
+This server handles:
+- LiveKit agent sessions for voice interactions
+- LinkedIn post detection and queueing
+- Token generation for client connections
+"""
+
+import os
+import asyncio
+import json
+import re
+import signal
+import sys
+import logging
+from dataclasses import dataclass
+from typing import Optional, Dict, Any
+from contextlib import asynccontextmanager
+
+import aiohttp
+from aiohttp import web
+from dotenv import load_dotenv
+import redis.asyncio as redis
+
+from livekit import api
+from livekit.agents import AgentSession, Agent, JobContext, WorkerOptions, AgentServer
+from livekit.agents import inference, llm
+from livekit.plugins import elevenlabs
+from livekit.agents import stt
+
+load_dotenv()
+
+# Suppress noisy library tracebacks during normal operation
+# Only show critical errors from LiveKit agents
+logging.getLogger("livekit.agents.tts").setLevel(logging.ERROR)
+logging.getLogger("livekit.agents.voice").setLevel(logging.ERROR)
+
+
+
+# ============================================================================
+# Configuration Management
+# ============================================================================
+
+@dataclass
+class Config:
+    """Centralized configuration management"""
+    # LiveKit
+    livekit_api_key: str
+    livekit_api_secret: str
+    livekit_url: str
+    
+    # Redis
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_username: Optional[str] = None
+    redis_password: Optional[str] = None
+    redis_queue_name: str = "linkedin_tasks"
+    
+    # User Data
+    user_name: str = "User"
+    linkedin_context_id: str = ""
+    
+    # ElevenLabs
+    elevenlabs_api_key: Optional[str] = None
+    
+    # Image Generation
+    google_api_key: Optional[str] = None
+    openai_api_key: Optional[str] = None
+    
+    @classmethod
+    def from_env(cls) -> "Config":
+        """Load configuration from environment variables"""
+        api_key = os.getenv("LIVEKIT_API_KEY")
+        api_secret = os.getenv("LIVEKIT_API_SECRET")
+        livekit_url = os.getenv("LIVEKIT_URL", "wss://del-hecqeidt.livekit.cloud")
+        
+        if not api_key or not api_secret:
+            raise ValueError("LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set")
+        
+        return cls(
+            livekit_api_key=api_key,
+            livekit_api_secret=api_secret,
+            livekit_url=livekit_url,
+            redis_host=os.getenv("REDIS_HOST", "localhost"),
+            redis_port=int(os.getenv("REDIS_PORT", "6379")),
+            redis_db=int(os.getenv("REDIS_DB", "0")),
+            redis_username=os.getenv("REDIS_USERNAME"),
+            redis_password=os.getenv("REDIS_PASSWORD"),
+            user_name=os.getenv("USER_NAME", "User"),
+            linkedin_context_id=os.getenv("LINKEDIN_CONTEXT_ID", ""),
+            elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY"),
+            google_api_key=os.getenv("GOOGLE_GENERATIVE_AI_API_KEY") or os.getenv("GEMINI_API_KEY"),
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+        )
+    
+    @property
+    def user_data(self) -> Dict[str, Any]:
+        """Get user data dictionary"""
+        return {
+            "name": self.user_name,
+            "linkedin_context_id": self.linkedin_context_id,
+        }
+
+
+# ============================================================================
+# CORS Middleware
+# ============================================================================
+
+@web.middleware
+async def cors_middleware(request: web.Request, handler):
+    """Handle CORS for all requests"""
+    if request.method == "OPTIONS":
+        return web.Response(
+            status=200,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Max-Age": "3600",
+            }
+        )
+    
+    response = await handler(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
+
+
+# ============================================================================
+# LLM Utilities
+# ============================================================================
+
+async def stream_llm_response(llm_model, chat_ctx: llm.ChatContext) -> str:
+    """
+    Extract full text response from LLM stream.
+    Handles all chunk types consistently.
+    """
+    response_text = ""
+    stream = llm_model.chat(chat_ctx=chat_ctx)
+    
+    async for chunk in stream:
+        if isinstance(chunk, str):
+            response_text += chunk
+        elif hasattr(chunk, 'content') and chunk.content:
+            response_text += chunk.content
+        elif hasattr(chunk, 'choices'):
+            for choice in chunk.choices:
+                if hasattr(choice, 'delta') and hasattr(choice.delta, 'content'):
+                    if choice.delta.content:
+                        response_text += choice.delta.content
+                elif hasattr(choice, 'content') and choice.content:
+                    response_text += choice.content
+    
+    return response_text.strip()
+
+
+# ============================================================================
+# Redis Service
+# ============================================================================
+
+class RedisService:
+    """Manages Redis connection and queue operations"""
+    
+    def __init__(self, config: Config):
+        self.config = config
+        self._client: Optional[redis.Redis] = None
+    
+    async def connect(self) -> redis.Redis:
+        """Get or create Redis client connection"""
+        if self._client is None:
+            kwargs = {
+                "host": self.config.redis_host,
+                "port": self.config.redis_port,
+                "db": self.config.redis_db,
+                "decode_responses": False,
+            }
+            if self.config.redis_username:
+                kwargs["username"] = self.config.redis_username
+            if self.config.redis_password:
+                kwargs["password"] = self.config.redis_password
+            
+            self._client = redis.Redis(**kwargs)
+        return self._client
+    
+    async def push_task(self, task_data: Dict[str, Any]) -> None:
+        """Push a task to the Redis queue"""
+        client = await self.connect()
+        task_json = json.dumps(task_data)
+        await client.lpush(self.config.redis_queue_name, task_json.encode('utf-8'))
+        print(f"✅ Pushed task to Redis queue: {task_data.get('type', 'unknown')}")
+    
+    async def close(self) -> None:
+        """Close Redis connection"""
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+
+
+# ============================================================================
+# Image Generation Service
+# ============================================================================
+
+class ImageGenerationService:
+    """Handles image generation using various providers"""
+    
+    def __init__(self, config: Config):
+        self.config = config
+    
+    async def generate(self, description: str) -> Optional[str]:
+        """Generate an image from description using available provider"""
+        # Try OpenAI DALL-E first
+        if self.config.openai_api_key:
+            url = await self._generate_with_dalle(description)
+            if url:
+                return url
+        
+        # Try Google Imagen if configured
+        if self.config.google_api_key:
+            url = await self._generate_with_imagen(description)
+            if url:
+                return url
+        
+        print("⚠️ No image generation API configured")
+        return None
+    
+    async def _generate_with_dalle(self, description: str) -> Optional[str]:
+        """Generate image using OpenAI DALL-E"""
+        try:
+            url = "https://api.openai.com/v1/images/generations"
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "model": "dall-e-3",
+                    "prompt": description,
+                    "n": 1,
+                    "size": "1024x1024",
+                    "quality": "standard"
+                }
+                headers = {
+                    "Authorization": f"Bearer {self.config.openai_api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                async with session.post(url, json=payload, headers=headers) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data.get("data", [{}])[0].get("url")
+                    else:
+                        error_text = await response.text()
+                        print(f"⚠️ DALL-E API error: {response.status} - {error_text}")
+        except Exception as e:
+            print(f"⚠️ DALL-E generation failed: {e}")
+        
+        return None
+    
+    async def _generate_with_imagen(self, description: str) -> Optional[str]:
+        """Generate image using Google Imagen (placeholder for implementation)"""
+        # TODO: Implement Vertex AI Imagen integration
+        return None
+
+
+# ============================================================================
+# LinkedIn Content Service
+# ============================================================================
+
+class LinkedInContentService:
+    """Handles LinkedIn post content extraction and analysis"""
+    
+    def __init__(self, llm_model, image_service: ImageGenerationService):
+        self.llm_model = llm_model
+        self.image_service = image_service
+    
+    async def analyze_and_extract(self, conversation_text: str) -> Optional[Dict[str, Any]]:
+        """
+        Analyze conversation to determine if user wants to post and extract content.
+        Returns dict with post_content, needs_image, image_description, or None.
+        """
+        try:
+            analysis_prompt = f"""Analyze this conversation and determine if the user EXPLICITLY requested to post on LinkedIn.
+
+Conversation:
+{conversation_text}
+
+CRITICAL: Only return wants_to_post: true if the user EXPLICITLY asked to post on LinkedIn.
+- If user just mentioned something interesting → wants_to_post: false
+- If user said "post on LinkedIn" or "share on LinkedIn" → wants_to_post: true
+- If user is just having a conversation → wants_to_post: false
+- Do NOT suggest posting just because the topic is interesting
+
+If wants_to_post is true, then determine:
+1. What is the post content? (extract or generate professional LinkedIn post)
+2. Is there an image generation request? If yes, what should the image show?
+
+Respond in JSON format only:
+{{
+  "wants_to_post": true/false,
+  "post_content": "the LinkedIn post text" or null,
+  "needs_image": true/false,
+  "image_description": "what to generate" or null
+}}
+
+If user doesn't explicitly want to post, return wants_to_post: false and skip the rest."""
+
+            chat_ctx = llm.ChatContext()
+            chat_ctx.add_message(role="user", content=analysis_prompt)
+            
+            response_text = await stream_llm_response(self.llm_model, chat_ctx)
+            
+            # Parse JSON response
+            json_match = re.search(r'\{[^}]+\}', response_text, re.DOTALL)
+            if not json_match:
+                return None
+            
+            result = json.loads(json_match.group(0))
+            wants_to_post = result.get("wants_to_post", False)
+            
+            if not wants_to_post:
+                return None
+            
+            post_content = result.get("post_content", "").strip()
+            if len(post_content) < 10:
+                return None
+            
+            return {
+                "post_content": post_content,
+                "needs_image": result.get("needs_image", False),
+                "image_description": result.get("image_description"),
+            }
+            
+        except Exception as e:
+            print(f"❌ Error analyzing conversation: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    async def process_post_request(self, conversation_text: str, redis_service: RedisService, config: Config) -> None:
+        """Process a LinkedIn post request: analyze, generate image if needed, and queue"""
+        result = await self.analyze_and_extract(conversation_text)
+        if not result:
+            return
+        
+        post_content = result["post_content"]
+        needs_image = result.get("needs_image", False)
+        image_description = result.get("image_description")
+        
+        # Generate image if needed
+        image_url = None
+        if needs_image and image_description:
+            print(f"🖼️ Generating image: {image_description[:100]}...")
+            image_url = await self.image_service.generate(image_description)
+        
+        # Queue the post
+        task = {
+            "type": "linkedin_post",
+            "post_text": post_content,
+            "image_url": image_url,
+            "transcript": conversation_text,
+            "user_data": config.user_data,
+            "timestamp": asyncio.get_event_loop().time()
+        }
+        
+        await redis_service.push_task(task)
+        print(f"📤 Queued LinkedIn post: {post_content[:100]}..." + (f" with image" if image_url else ""))
+
+
+# ============================================================================
+# HTTP Token Server
+# ============================================================================
+
+class TokenServer:
+    """Manages HTTP server for token generation"""
+    
+    def __init__(self, config: Config):
+        self.config = config
+        self._runner: Optional[web.AppRunner] = None
+        self._site: Optional[web.TCPSite] = None
+    
+    async def start(self) -> None:
+        """Start the token server"""
+        app = web.Application(middlewares=[cors_middleware])
+        app.router.add_get("/api/token", self._token_handler)
+        
+        self._runner = web.AppRunner(app)
+        await self._runner.setup()
+        self._site = web.TCPSite(self._runner, "localhost", 8080)
+        await self._site.start()
+        print("✅ Token server running on http://localhost:8080/api/token")
+    
+    async def _token_handler(self, request: web.Request) -> web.Response:
+        """Generate a LiveKit access token for the client"""
+        try:
+            room = request.query.get("room", "my-room")
+            identity = request.query.get("identity", "user")
+            
+            token = (
+                api.AccessToken(self.config.livekit_api_key, self.config.livekit_api_secret)
+                .with_identity(identity)
+                .with_grants(
+                    api.VideoGrants(
+                        room_join=True,
+                        room=room,
+                        can_publish=True,
+                        can_subscribe=True,
+                    )
+                )
+                .to_jwt()
+            )
+            
+            return web.json_response({"token": token})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+    
+    async def stop(self) -> None:
+        """Stop the token server"""
+        if self._site:
+            await self._site.stop()
+        if self._runner:
+            await self._runner.cleanup()
+
+
+# ============================================================================
+# LiveKit Agent Entrypoint
+# ============================================================================
+
+async def entrypoint(ctx: JobContext):
+    """Entrypoint function for LiveKit agent - called when a job is assigned"""
+    await ctx.connect()
+    
+    # Wait for room state to stabilize
+    await asyncio.sleep(0.1)
+    
+    # Load configuration
+    config = Config.from_env()
+    
+    # Initialize services
+    redis_service = RedisService(config)
+    image_service = ImageGenerationService(config)
+    
+    # Initialize STT
+    stt_model = inference.STT(
+        model="deepgram/nova-3",
+        language="en",
+    )
+    
+    # Initialize LLM
+    llm_model = inference.LLM(
+        model="google/gemini-2.0-flash",
+    )
+    
+    # Initialize TTS
+    if not config.elevenlabs_api_key:
+        raise ValueError("ELEVENLABS_API_KEY environment variable is required for TTS")
+    
+    # Validate API key format (ElevenLabs keys typically start with specific prefixes)
+    api_key = config.elevenlabs_api_key.strip()
+    if not api_key or len(api_key) < 10:
+        raise ValueError("ELEVENLABS_API_KEY appears to be invalid (too short)")
+    
+    # Set ELEVEN_API_KEY as fallback (plugin checks this env var)
+    # But we'll pass it explicitly to ensure it's used
+    if "ELEVEN_API_KEY" not in os.environ:
+        os.environ["ELEVEN_API_KEY"] = api_key
+    
+    # Try to initialize TTS with explicit API key
+    # Use eleven_turbo_v2_5 as default model (more reliable than multilingual_v2)
+    try:
+        tts_model = elevenlabs.TTS(
+            voice_id="EXAVITQu4vr4xnSDxMaL",
+            model="eleven_turbo_v2_5",  # More reliable model
+            api_key=api_key,
+            auto_mode=True,  # Enable auto mode for better reliability
+        )
+        print("✅ ElevenLabs TTS initialized successfully")
+        print(f"   Using voice: EXAVITQu4vr4xnSDxMaL")
+        print(f"   Using model: eleven_turbo_v2_5")
+        print(f"   API key: {api_key[:10]}...{api_key[-4:] if len(api_key) > 14 else ''}")
+    except Exception as e:
+        print(f"❌ Failed to initialize ElevenLabs TTS: {e}")
+        print("   Trying with default settings...")
+        # Fallback: let plugin use environment variable
+        tts_model = elevenlabs.TTS(
+            voice_id="EXAVITQu4vr4xnSDxMaL",
+            model="eleven_turbo_v2_5",
+        )
+    
+    # Add TTS error handler - only log final failures, not retries
+    _tts_error_count = {"count": 0}
+    
+    def on_tts_error(error_event):
+        error = error_event.error
+        _tts_error_count["count"] += 1
+        
+        # Only log detailed error on first occurrence or if not retryable
+        if _tts_error_count["count"] == 1 or (hasattr(error, 'retryable') and not error.retryable):
+            print(f"❌ TTS Error: {error}")
+            if hasattr(error, 'message'):
+                print(f"   Error message: {error.message}")
+            if hasattr(error, 'body'):
+                print(f"   Error body: {error.body}")
+            if hasattr(error, 'retryable'):
+                print(f"   Retryable: {error.retryable}")
+            if _tts_error_count["count"] == 1:
+                print("   Possible causes:")
+                print("   - Invalid or expired ElevenLabs API key")
+                print("   - Quota exceeded (check your ElevenLabs account)")
+                print("   - Network connectivity issues")
+                print("   - Voice ID or model not available")
+                print(f"   - API key being used: {config.elevenlabs_api_key[:10] if config.elevenlabs_api_key else 'NOT SET'}...")
+                print("   - Retrying automatically...")
+        # Suppress intermediate retry errors to reduce noise
+    
+    tts_model.on("error", on_tts_error)
+    
+    # System prompt
+    system_prompt = f"""You are a helpful voice AI assistant.
+
+User: {config.user_name}
+LinkedIn Context ID: {config.linkedin_context_id}
+
+LinkedIn Posting:
+- Only activate when user explicitly requests it (e.g., "post on LinkedIn", "share on LinkedIn")
+- Never suggest or mention it proactively
+- When activated, acknowledge briefly and continue naturally
+- System handles content extraction and posting automatically"""
+    
+    # Initialize LinkedIn content service
+    linkedin_service = LinkedInContentService(llm_model, image_service)
+    
+    # Create custom Agent class
+    class LinkedInPostAgent(Agent):
+        def __init__(self, *args, linkedin_service=None, redis_service=None, config=None, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._linkedin_service = linkedin_service
+            self._redis_service = redis_service
+            self._config = config
+        
+        async def on_user_turn_completed(
+            self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+        ) -> None:
+            """Called when user finishes speaking - check for post requests"""
+            print(f"🔄 User turn completed - checking for post requests...")
+            
+            if not self._linkedin_service or not self._redis_service:
+                return
+            
+            # Get full conversation context
+            conversation_text = " ".join(
+                item.text_content for item in self._chat_ctx.items
+                if isinstance(item, llm.ChatMessage) and item.role == "user" and item.text_content
+            )
+            
+            if not conversation_text.strip():
+                return
+            
+            print(f"📋 Conversation context: {conversation_text[:200]}...")
+            
+            # Process in background
+            asyncio.create_task(
+                self._linkedin_service.process_post_request(
+                    conversation_text, self._redis_service, self._config
+                )
+            )
+    
+    # Start agent session
+    session = AgentSession(
+        stt=stt_model,
+        llm=llm_model,
+        tts=tts_model,
+    )
+    
+    await session.start(
+        room=ctx.room,
+        agent=LinkedInPostAgent(
+            instructions=system_prompt,
+            linkedin_service=linkedin_service,
+            redis_service=redis_service,
+            config=config
+        )
+    )
+    
+    # Greet the user (non-blocking, graceful failure)
+    # Run in background task so it doesn't block session startup
+    async def greet_user():
+        """Greet user with retry logic"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Small delay to ensure TTS connection is ready
+                await asyncio.sleep(0.5)
+                await session.generate_reply(
+                    instructions="Greet the user and offer your assistance."
+                )
+                print("✅ Greeting sent successfully")
+                return
+            except asyncio.CancelledError:
+                # Task was cancelled during shutdown
+                return
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 0.5
+                    print(f"⚠️ Greeting attempt {attempt + 1} failed, retrying in {wait_time}s...")
+                    print(f"   Error: {e}")
+                    try:
+                        await asyncio.sleep(wait_time)
+                    except asyncio.CancelledError:
+                        return
+                else:
+                    print(f"⚠️ Warning: Could not generate greeting after {max_retries} attempts")
+                    print(f"   Final error: {e}")
+                    print("   The agent will still work, but may not be able to speak.")
+                    print("   Check your ElevenLabs API key, quota, and network connection.")
+    
+    # Start greeting in background (fire and forget - will be cleaned up with session)
+    asyncio.create_task(greet_user())
+    
+    print("✅ Agent session started with LinkedIn post detection enabled")
+
+
+# ============================================================================
+# Main Application
+# ============================================================================
+
+class Application:
+    """Main application class managing lifecycle"""
+    
+    def __init__(self, config: Config):
+        self.config = config
+        self.token_server = TokenServer(config)
+        self.redis_service = RedisService(config)
+        self.server: Optional[AgentServer] = None
+    
+    async def start(self) -> None:
+        """Start all services"""
+        # Start token server
+        await self.token_server.start()
+        
+        # Verify credentials
+        if not self.config.livekit_api_key or not self.config.livekit_api_secret:
+            raise ValueError("LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set")
+        
+        print(f"🔗 AgentServer will connect to: {self.config.livekit_url}")
+        print(f"🔑 Using API Key: {self.config.livekit_api_key[:10]}...")
+        
+        # Create AgentServer
+        self.server = AgentServer.from_server_options(
+            WorkerOptions(
+                entrypoint_fnc=entrypoint,
+                ws_url=self.config.livekit_url,
+                api_key=self.config.livekit_api_key,
+                api_secret=self.config.livekit_api_secret,
+            )
+        )
+        
+        # Add event listeners
+        @self.server.on("worker_started")
+        def on_worker_started():
+            print("✅ Worker started successfully")
+        
+        @self.server.on("worker_registered")
+        def on_worker_registered():
+            print("✅ Worker registered with LiveKit - ready to accept jobs!")
+        
+        print("Local LiveKit Agent backend started")
+        print("Token server running on http://localhost:8080/api/token")
+        print("Waiting for LiveKit jobs...")
+        print("Press Ctrl+C to exit gracefully")
+    
+    async def run(self) -> None:
+        """Run the server"""
+        if not self.server:
+            raise RuntimeError("Server not started. Call start() first.")
+        await self.server.run()
+    
+    async def stop(self) -> None:
+        """Stop all services"""
+        print("\n🛑 Shutting down gracefully...")
+        
+        if self.token_server:
+            await self.token_server.stop()
+        
+        if self.redis_service:
+            await self.redis_service.close()
+        
+        print("✅ Cleanup complete")
+
+
+async def main():
+    """Main async function with proper signal handling"""
+    # Suppress asyncio InvalidStateError during shutdown
+    def suppress_asyncio_errors(loop, context):
+        """Suppress asyncio InvalidStateError during shutdown"""
+        exception = context.get('exception')
+        if isinstance(exception, asyncio.InvalidStateError):
+            # Suppress InvalidStateError during shutdown - these are harmless
+            return
+        # Let other exceptions be handled normally
+        if loop.get_debug():
+            loop.default_exception_handler(context)
+    
+    # Set custom exception handler
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(suppress_asyncio_errors)
+    
+    # Load configuration
+    try:
+        config = Config.from_env()
+    except ValueError as e:
+        print(f"❌ Configuration error: {e}")
+        return
+    
+    # Create application
+    app = Application(config)
+    
+    # Setup signal handlers
+    shutdown_event = asyncio.Event()
+    
+    def signal_handler(signum, frame):
+        print(f"\n⚠️ Received signal {signum}, initiating shutdown...")
+        shutdown_event.set()
+    
+    try:
+        if hasattr(signal, 'SIGINT'):
+            signal.signal(signal.SIGINT, signal_handler)
+        if hasattr(signal, 'SIGTERM'):
+            signal.signal(signal.SIGTERM, signal_handler)
+    except (ValueError, OSError) as e:
+        print(f"⚠️ Could not register signal handlers: {e}")
+    
+    try:
+        # Start application
+        await app.start()
+        
+        # Run server in background
+        server_task = asyncio.create_task(app.run())
+        shutdown_task = asyncio.create_task(shutdown_event.wait())
+        
+        # Wait for shutdown or completion
+        done, pending = await asyncio.wait(
+            [server_task, shutdown_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        
+        # Cancel pending tasks gracefully with timeout
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        
+        # Wait for cancellation with timeout, ignore errors
+        if pending:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*pending, return_exceptions=True),
+                    timeout=2.0
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+            except Exception:
+                # Ignore all errors during cleanup
+                pass
+        
+    except KeyboardInterrupt:
+        print("\n⚠️ KeyboardInterrupt received, shutting down...")
+    except Exception as e:
+        print(f"\n❌ Error in main: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        await app.stop()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+        print("\n✅ Exited cleanly")
+    except KeyboardInterrupt:
+        print("\n✅ Exited cleanly")
+    except Exception as e:
+        print(f"\n❌ Fatal error: {e}")
+        import traceback
+        traceback.print_exc()

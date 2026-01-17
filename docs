@@ -1,0 +1,11 @@
+when the session is verified using one account so no longer need to verify on other
+
+agent can be audited verified and tested
+
+
+but I dont have product ready, all I have is backend code, so how do i make it?
+
+set SESSION_NAME=linkedin-comment&& npm run linkedin-comment
+set SESSION_NAME=linkedin-message-explore&& npm run linkedin-message-explore
+
+So, my pitch is to have digital assistant that can handle or manage your social media targeted for linkedin, since LinkedIn is the new tiktok where the founder farm or publish content and is super valuable to have reach, User can call their agent and make request to any post, also ask it to generate any image to be attached to the post, or may be look at some slack channel like production or features and discuss about that and make a linkedin post on that as well, and it can also reply to your low stakes messages and inquire you about the higher one. And, it does work and I dont have frontend ready, and honestly this can be mocked because my development code are just not super ready but since our product is about automating and for this process we can make it by doing manually, But I want to make all of my video to be created by AI or automated.

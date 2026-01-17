@@ -1,0 +1,11 @@
+.env
+node_modules
+dist
+.cursorrules
+.cursorignore
+.cursorignore
+backend-server/venv
+my-stagehand-app/linkedin-context.json
+my-stagehand-app/.sessions/
+
+venv/
