@@ -302,7 +302,7 @@ async function uploadFileWithPlaywright(
 async function main() {
   // === Input ===
   const postText = process.env.POST_TEXT ?? "Lets go";
-  const imageUrl = process.env.IMAGE_URL ?? "https://dbukjj6eu5tsf.cloudfront.net/sidearm.sites/fsdb.sidearmsports.com/images/logos/site/site.png"; // Only use image if explicitly provided
+  const imageUrl = process.env.IMAGE_URL ?? ""; // Only use image if explicitly provided
   const keepBrowserOpen = process.env.KEEP_BROWSER_OPEN === "true";
 
   // === Initialize session manager ===

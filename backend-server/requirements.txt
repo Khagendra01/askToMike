@@ -27,3 +27,7 @@ pymongo>=4.0.0
 
 # Voyage AI for embeddings
 voyageai
+
+# LangGraph for workflow orchestration
+langgraph>=0.2.0
+langchain-google-genai>=2.0.0
