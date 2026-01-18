@@ -18,10 +18,34 @@ async function main() {
   await page.goto("https://www.linkedin.com");
 
   if (mode === "BROWSERBASE") {
-    console.log(
-      "🔗 Open this link in your browser and log in to LinkedIn:",
-      `https://browserbase.com/sessions/${sessionInfo.sessionId}`
-    );
+    console.log("\n" + "=".repeat(60));
+    console.log("🔗 BROWSERBASE URLs:");
+    console.log("=".repeat(60));
+    console.log("📺 Session View (Dashboard - requires Browserbase login):");
+    console.log(`   https://browserbase.com/sessions/${sessionInfo.sessionId}`);
+    console.log("\n🔌 CDP Connection URL (for Playwright/automation):");
+    console.log(`   ${sessionInfo.connectUrl}`);
+    
+    // Check if there's a viewer URL or embed URL available
+    console.log("\n💻 For Frontend Display:");
+    if (sessionInfo.viewerUrl) {
+      console.log("   ✅ LIVE VIEWER URL (for iframe embedding):");
+      console.log(`   ${sessionInfo.viewerUrl}`);
+      console.log("\n   📦 Embed in frontend like this:");
+      console.log(`   <iframe src="${sessionInfo.viewerUrl}" width="100%" height="600" />`);
+    } else {
+      console.log("   ⚠️  Live viewer URL not available (may need bb.sessions.debug())");
+    }
+    console.log("\n   📺 Dashboard URL (requires Browserbase login):");
+    console.log(`   https://browserbase.com/sessions/${sessionInfo.sessionId}`);
+    
+    if (sessionInfo.contextId) {
+      console.log("\n🔑 Context ID (for reusing login state):");
+      console.log(`   ${sessionInfo.contextId}`);
+      console.log(`   https://browserbase.com/contexts/${sessionInfo.contextId}`);
+    }
+    console.log("\n💡 Tip: For frontend display, you may need to generate a viewer token!");
+    console.log("=".repeat(60) + "\n");
   } else {
     console.log("🌐 Browser opened locally. Please log in to LinkedIn in the browser window.");
   }

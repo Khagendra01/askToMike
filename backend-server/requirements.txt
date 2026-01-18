@@ -24,3 +24,6 @@ duckduckgo-search
 
 # MongoDB
 pymongo>=4.0.0
+
+# Voyage AI for embeddings
+voyageai

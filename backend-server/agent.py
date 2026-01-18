@@ -7,7 +7,9 @@ Routes user requests to appropriate agents based on user intent.
 import os
 import asyncio
 import logging
+import json
 from typing import Optional
+from datetime import datetime
 
 from livekit.agents import AgentSession, JobContext, inference, llm, Agent, function_tool, RunContext
 from livekit.plugins import elevenlabs
@@ -24,6 +26,7 @@ from services.redis_service import RedisService
 from services.image_service import ImageGenerationService
 from services.web_search_service import WebSearchService
 from services.tts_service import SystemTTS
+from services.conversation_storage_service import ConversationStorageService
 from agents.agent_router import AgentRouter
 from utils.logger import (
     get_logger, get_agent_logger, get_router_logger, 
@@ -82,6 +85,7 @@ async def entrypoint(ctx: JobContext):
     redis_service = RedisService(config)
     image_service = ImageGenerationService(config)
     web_search_service = WebSearchService(config)
+    conversation_storage = ConversationStorageService(config)
     
     # Initialize router
     router = AgentRouter(
@@ -179,11 +183,14 @@ async def entrypoint(ctx: JobContext):
             self._router = router
             self._shared_state = shared_state
             self._web_search_service = web_search_service
+            self._conversation_storage = conversation_storage
             self._current_mode = 'basic'  # Track current mode
+            self._session_id = None  # Will be set when session starts
         
         async def on_user_speech_committed(self, message: llm.ChatMessage):
             """Route user message and update mode if needed"""
             user_text = message.text_content
+            logger.info(f"📝 on_user_speech_committed called with: {user_text[:50]}...")
             
             # Determine which agent type should handle this
             agent_type = await self._router.determine_agent(user_text)
@@ -199,25 +206,41 @@ async def entrypoint(ctx: JobContext):
             
             # Log to shared state
             if self._shared_state:
-                await self._shared_state.add_conversation(
-                    self._current_mode,
-                    "user",
-                    user_text
-                )
+                try:
+                    await self._shared_state.add_conversation(
+                        self._current_mode,
+                        "user",
+                        user_text
+                    )
+                    logger.info(f"✅ Saved user message to Redis (agent: {self._current_mode})")
+                except Exception as e:
+                    logger.error(f"❌ Failed to save user message to Redis: {e}", exc_info=True)
+            else:
+                logger.warning("⚠️ Shared state not available for saving conversation")
             
             agent_logger = get_agent_logger(self._current_mode)
             agent_logger.info(f"🗣️  User: {user_text}")
         
         async def on_agent_speech_committed(self, message: llm.ChatMessage):
             """Log agent response"""
+            agent_text = message.text_content
+            logger.info(f"📝 on_agent_speech_committed called with: {agent_text[:50]}...")
+            
             agent_logger = get_agent_logger(self._current_mode)
-            agent_logger.info(f"🤖 Agent: {message.text_content}")
+            agent_logger.info(f"🤖 Agent: {agent_text}")
+            
             if self._shared_state:
-                await self._shared_state.add_conversation(
-                    self._current_mode,
-                    "assistant",
-                    message.text_content
-                )
+                try:
+                    await self._shared_state.add_conversation(
+                        self._current_mode,
+                        "assistant",
+                        agent_text
+                    )
+                    logger.info(f"✅ Saved agent message to Redis (agent: {self._current_mode})")
+                except Exception as e:
+                    logger.error(f"❌ Failed to save agent message to Redis: {e}", exc_info=True)
+            else:
+                logger.warning("⚠️ Shared state not available for saving conversation")
         
         # Add all function tools from specialized agents
         @function_tool
@@ -396,6 +419,78 @@ async def entrypoint(ctx: JobContext):
                 return f"Error accessing calendar: {str(e)}"
         
         @function_tool
+        async def retrieve_previous_conversation(
+            self,
+            context: RunContext,
+            query: str,
+            limit: int = 3
+        ) -> str:
+            """
+            Search and retrieve information from previous conversations. Use this when the user asks about something that happened in a past conversation, references something discussed before, or wants to recall details from earlier sessions.
+            
+            Args:
+                query: Search query describing what to look for in previous conversations
+                limit: Maximum number of previous conversation results to return (default: 3)
+            
+            Returns:
+                A formatted string with relevant previous conversation excerpts
+            """
+            log_tool_call("retrieve_previous_conversation", self._current_mode, {
+                "query": query,
+                "limit": limit
+            })
+            
+            if not self._conversation_storage:
+                return "Conversation storage service is not available."
+            
+            try:
+                results = await self._conversation_storage.search_conversations(
+                    query=query,
+                    limit=limit
+                )
+                
+                if not results:
+                    return f"No previous conversations found matching: '{query}'"
+                
+                result_text = f"Found {len(results)} previous conversation(s) matching '{query}':\n\n"
+                
+                for i, conv in enumerate(results, 1):
+                    session_id = conv.get("session_id", "unknown")
+                    saved_at = conv.get("saved_at", "")
+                    messages = conv.get("messages", [])
+                    score = conv.get("score", 0.0)
+                    message_count = conv.get("message_count", len(messages))
+                    
+                    result_text += f"{i}. Previous conversation (Session: {session_id[:20]}..., "
+                    if saved_at:
+                        try:
+                            dt = datetime.fromisoformat(saved_at.replace('Z', '+00:00'))
+                            result_text += f"Date: {dt.strftime('%Y-%m-%d %I:%M %p')}, "
+                        except:
+                            pass
+                    result_text += f"Messages: {message_count}, Relevance: {score:.3f})\n"
+                    
+                    # Show a few key messages from the conversation
+                    if messages:
+                        # Show user and assistant messages (limit to 3-4)
+                        shown_messages = [m for m in messages if m.get("role") in ["user", "assistant"]][:4]
+                        for msg in shown_messages:
+                            role = msg.get("role", "unknown")
+                            message_text = msg.get("message", "")[:200]  # Truncate long messages
+                            result_text += f"   {role}: {message_text}"
+                            if len(msg.get("message", "")) > 200:
+                                result_text += "..."
+                            result_text += "\n"
+                    
+                    result_text += "\n"
+                
+                return result_text
+                
+            except Exception as e:
+                logger.error(f"❌ Conversation retrieval error: {e}", exc_info=True)
+                return f"Error retrieving previous conversations: {str(e)}"
+        
+        @function_tool
         async def create_calendar_event(
             self,
             context: RunContext,
@@ -459,6 +554,8 @@ async def entrypoint(ctx: JobContext):
     unified_agent._router = router
     unified_agent._shared_state = shared_state
     unified_agent._web_search_service = web_search_service
+    unified_agent._conversation_storage = conversation_storage
+    unified_agent._session_id = ctx.job.id  # Use job ID as session ID
     
     # Start agent session
     session = AgentSession(
@@ -467,18 +564,122 @@ async def entrypoint(ctx: JobContext):
         tts=tts_model,
     )
     
-    await session.start(
-        room=ctx.room,
-        agent=unified_agent
-    )
+    # Store session metadata for conversation storage
+    session_id = ctx.job.id
+    room_name = ctx.room.name
     
-    # Greet the user
+    # Track if conversation has been saved to avoid duplicate saves
+    _conversation_saved = {"saved": False}
+    
+    # Function to save conversation when session ends
+    async def save_conversation_on_exit():
+        """Save conversation to MongoDB when session ends"""
+        if _conversation_saved["saved"]:
+            logger.info("💾 Conversation already saved, skipping duplicate save")
+            return  # Already saved
+        
+        try:
+            logger.info("=" * 60)
+            logger.info("💾 SESSION END DETECTED - Saving conversation to MongoDB...")
+            logger.info("=" * 60)
+            
+            # Get all messages from shared state for this session
+            # We collect from all agent conversation keys since they're stored per-agent
+            all_messages = []
+            
+            # Get messages from all agent conversation lists
+            client = await shared_state.connect()
+            pattern = f"{shared_state._conversation_prefix}*"
+            conversation_keys = await client.keys(pattern)
+            
+            logger.info(f"📋 Found {len(conversation_keys)} conversation key(s) in Redis")
+            
+            for key in conversation_keys:
+                entries = await client.lrange(key, 0, -1)
+                logger.info(f"   - {key}: {len(entries)} message(s)")
+                for entry in entries:
+                    try:
+                        msg = json.loads(entry)
+                        all_messages.append(msg)
+                    except json.JSONDecodeError:
+                        continue
+            
+            # Sort by timestamp
+            all_messages.sort(key=lambda x: x.get("timestamp", ""))
+            
+            if all_messages:
+                _conversation_saved["saved"] = True
+                
+                # Count messages by role
+                user_count = sum(1 for m in all_messages if m.get("role") == "user")
+                assistant_count = sum(1 for m in all_messages if m.get("role") == "assistant")
+                
+                # Extract agent types from messages
+                agent_types = list(set(m.get("agent_name", "basic") for m in all_messages if "agent_name" in m))
+                if not agent_types:
+                    agent_types = ["basic"]
+                
+                logger.info(f"📊 Conversation Summary:")
+                logger.info(f"   Session ID: {session_id}")
+                logger.info(f"   Room: {room_name}")
+                logger.info(f"   Total Messages: {len(all_messages)}")
+                logger.info(f"   - User messages: {user_count}")
+                logger.info(f"   - Assistant messages: {assistant_count}")
+                logger.info(f"   Agent types used: {', '.join(agent_types)}")
+                logger.info(f"")
+                logger.info(f"🔄 Generating embeddings and saving to MongoDB...")
+                
+                doc_id = await conversation_storage.save_conversation(
+                    session_id=session_id,
+                    room_name=room_name,
+                    messages=all_messages,
+                    metadata={
+                        "job_id": ctx.job.id,
+                        "room_name": room_name,
+                        "agent_types": agent_types
+                    }
+                )
+                
+                logger.info("=" * 60)
+                logger.info(f"✅ CONVERSATION SAVED SUCCESSFULLY!")
+                logger.info(f"   MongoDB Document ID: {doc_id}")
+                logger.info(f"   Collection: conversations")
+                logger.info(f"   Ready for vector search retrieval")
+                logger.info("=" * 60)
+            else:
+                logger.info("=" * 60)
+                logger.info(f"⚠️  No messages to save for session: {session_id}")
+                logger.info("   (Session ended without any conversation)")
+                logger.info("=" * 60)
+        except Exception as e:
+            logger.error("=" * 60)
+            logger.error(f"❌ FAILED TO SAVE CONVERSATION")
+            logger.error(f"   Error: {e}")
+            logger.error("=" * 60)
+            logger.error(f"❌ Failed to save conversation: {e}", exc_info=True)
+    
+    # Hook into room disconnect events to save conversation
+    # Note: LiveKit's .on() requires synchronous callbacks, so we use asyncio.create_task
+    @ctx.room.on("participant_disconnected")
+    def on_participant_disconnected(participant):
+        logger.info(f"👤 Participant disconnected: {participant.identity}")
+        # Save conversation when user disconnects (run async function in background)
+        asyncio.create_task(save_conversation_on_exit())
+    
+    @ctx.room.on("disconnected")
+    def on_room_disconnected():
+        logger.info("🔌 Room disconnected")
+        # Also save on room disconnect (backup handler)
+        asyncio.create_task(save_conversation_on_exit())
+    
+    # Greet the user immediately after session starts
     async def greet_user():
         """Greet user with retry logic"""
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                await asyncio.sleep(0.5)
+                # Small delay to ensure session is fully ready
+                await asyncio.sleep(0.1)
                 await session.generate_reply(
                     instructions="Greet the user warmly as their personal assistant. Be friendly and offer to help with anything they need - general questions, LinkedIn posts, or Slack messages."
                 )
@@ -488,13 +689,69 @@ async def entrypoint(ctx: JobContext):
                 return
             except Exception as e:
                 if attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 0.5
+                    wait_time = (attempt + 1) * 0.3  # Reduced retry delay
                     logger.warning(f"⚠️ Greeting attempt {attempt + 1} failed, retrying in {wait_time}s...")
                     await asyncio.sleep(wait_time)
                 else:
                     logger.warning(f"⚠️ Warning: Could not generate greeting after {max_retries} attempts")
     
-    asyncio.create_task(greet_user())
+    logger.info("✅ Multi-agent session starting")
+    logger.info("   Available agents: basic, linkedin, slack, x")
+    logger.info(f"   Session ID: {session_id}, Room: {room_name}")
+    
+    # Hook into session to capture messages from chat context
+    # This captures ALL messages (speech + text) that go through the session
+    async def monitor_session_messages():
+        """Monitor session for all messages and save them"""
+        try:
+            await asyncio.sleep(2)  # Wait for session to start
+            
+            # Access the agent's chat context after session starts
+            while True:
+                try:
+                    await asyncio.sleep(1)  # Check every second
+                    
+                    # Try to access messages from the agent's internal chat context
+                    if hasattr(unified_agent, '_chat_ctx') and unified_agent._chat_ctx:
+                        if hasattr(unified_agent._chat_ctx, 'messages'):
+                            messages = unified_agent._chat_ctx.messages
+                            # We'll track which ones we've saved
+                            if not hasattr(monitor_session_messages, '_saved_count'):
+                                monitor_session_messages._saved_count = 0
+                            
+                            new_messages = messages[monitor_session_messages._saved_count:]
+                            for msg in new_messages:
+                                try:
+                                    role = getattr(msg, 'role', None)
+                                    content = getattr(msg, 'content', None) or getattr(msg, 'text_content', None) or str(msg)
+                                    
+                                    if role in ['user', 'assistant'] and content and content.strip():
+                                        agent_name = getattr(unified_agent, '_current_mode', 'basic')
+                                        await shared_state.add_conversation(
+                                            agent_name,
+                                            role,
+                                            content
+                                        )
+                                        logger.info(f"💾 Captured {role} message: {content[:60]}...")
+                                        monitor_session_messages._saved_count += 1
+                                except Exception as e:
+                                    logger.debug(f"Error saving message from monitor: {e}")
+                except Exception as e:
+                    logger.debug(f"Error in monitor_session_messages: {e}")
+                    await asyncio.sleep(2)
+        except Exception as e:
+            logger.error(f"Error in monitor_session_messages task: {e}")
+    
+    # Start message monitoring
+    asyncio.create_task(monitor_session_messages())
+    
+    # Start session (this may take a moment to initialize)
+    await session.start(
+        room=ctx.room,
+        agent=unified_agent
+    )
     
     logger.info("✅ Multi-agent session started")
-    logger.info("   Available agents: basic, linkedin, slack, x")
+    
+    # Greet the user immediately after session is ready
+    asyncio.create_task(greet_user())

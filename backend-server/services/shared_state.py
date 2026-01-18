@@ -76,7 +76,8 @@ class SharedStateService:
         entry = {
             "role": role,
             "message": message,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "agent_name": agent_name  # Store agent_name in the entry for later retrieval
         }
         await client.lpush(conversation_key, json.dumps(entry))
         # Keep only last 100 conversations per agent
@@ -88,6 +89,75 @@ class SharedStateService:
         conversation_key = f"{self._conversation_prefix}{agent_name}"
         entries = await client.lrange(conversation_key, 0, limit - 1)
         return [json.loads(entry) for entry in entries]
+    
+    async def get_full_conversation(self, session_key: str) -> List[Dict[str, Any]]:
+        """
+        Get full conversation for a session.
+        Aggregates all messages across all agents for a session.
+        
+        Args:
+            session_key: Session identifier (e.g., room name or job ID)
+        
+        Returns:
+            List of conversation messages sorted by timestamp
+        """
+        client = await self.connect()
+        
+        # Get all conversation keys that match session pattern
+        # We'll use a pattern like "conversation:{session_key}:*" or get all conversations
+        pattern = f"{self._conversation_prefix}*"
+        all_keys = await client.keys(pattern)
+        
+        all_messages = []
+        for key in all_keys:
+            entries = await client.lrange(key, 0, -1)  # Get all entries
+            for entry in entries:
+                try:
+                    msg = json.loads(entry)
+                    all_messages.append(msg)
+                except json.JSONDecodeError:
+                    continue
+        
+        # Sort by timestamp
+        all_messages.sort(key=lambda x: x.get("timestamp", ""))
+        return all_messages
+    
+    async def get_conversation_by_session(self, session_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all conversation messages for a specific session.
+        This retrieves messages stored with session_id in the conversation key.
+        """
+        client = await self.connect()
+        
+        # For now, we'll use a session-specific key pattern
+        # In practice, we might store with session_id prefix
+        conversation_key = f"{self._conversation_prefix}session:{session_id}"
+        entries = await client.lrange(conversation_key, 0, -1)
+        
+        messages = []
+        for entry in entries:
+            try:
+                messages.append(json.loads(entry))
+            except json.JSONDecodeError:
+                continue
+        
+        # Also check default conversation keys (for backward compatibility)
+        # Collect from all agent conversation keys
+        agent_pattern = f"{self._conversation_prefix}*"
+        agent_keys = [k for k in await client.keys(agent_pattern) if not k.startswith(f"{self._conversation_prefix}session:")]
+        
+        for key in agent_keys:
+            entries = await client.lrange(key, 0, -1)
+            for entry in entries:
+                try:
+                    msg = json.loads(entry)
+                    messages.append(msg)
+                except json.JSONDecodeError:
+                    continue
+        
+        # Sort by timestamp
+        messages.sort(key=lambda x: x.get("timestamp", ""))
+        return messages
     
     async def set_context(self, context_key: str, context_data: Dict[str, Any]) -> None:
         """Set context data for agents"""

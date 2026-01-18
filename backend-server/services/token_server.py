@@ -68,10 +68,12 @@ class TokenServer:
                 .to_jwt()
             )
             
-            # Create room and dispatch agent (only once per room)
-            if room not in self._dispatched_rooms:
-                self._dispatched_rooms.add(room)
-                asyncio.create_task(self._create_room_and_dispatch(room))
+            # Note: Agent dispatch is handled automatically by LiveKit Cloud
+            # Manual dispatch is disabled to prevent duplicate agents
+            # If auto-dispatch is not enabled in LiveKit Cloud dashboard, uncomment below:
+            # if room not in self._dispatched_rooms:
+            #     self._dispatched_rooms.add(room)
+            #     asyncio.create_task(self._create_room_and_dispatch(room))
             
             return web.json_response({"token": token})
         except Exception as e:

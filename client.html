@@ -100,6 +100,7 @@
     const status = document.getElementById("status");
     let room = null;
     let localStream = null;
+    let isConnecting = false;
 
     // Get or create a persistent user identity
     function getUserIdentity() {
@@ -130,6 +131,23 @@
     }
 
     async function joinRoom() {
+      // Guard: prevent multiple simultaneous connections
+      if (isConnecting) {
+        log("⚠️ Connection already in progress, ignoring duplicate call", "error");
+        return;
+      }
+
+      // Guard: if already connected or room exists, disconnect first
+      if (room) {
+        log("⚠️ Room already exists, disconnecting first...");
+        await leaveRoom();
+        // Wait a bit for cleanup to complete
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+
+      // Set connecting flag
+      isConnecting = true;
+
       try {
         joinBtn.disabled = true;
         updateStatus("Connecting...", "status");
@@ -223,10 +241,30 @@
         updateStatus(`Error: ${error.message}`, "error");
         joinBtn.disabled = false;
         leaveBtn.style.display = "none";
+        
+        // Clean up on error
+        if (room) {
+          try {
+            await room.disconnect();
+          } catch (e) {
+            // Ignore disconnect errors during error handling
+          }
+          room = null;
+        }
+        if (localStream) {
+          localStream.getTracks().forEach(track => track.stop());
+          localStream = null;
+        }
+      } finally {
+        // Always clear connecting flag
+        isConnecting = false;
       }
     }
 
     async function leaveRoom() {
+      // Clear connecting flag if we're disconnecting
+      isConnecting = false;
+
       try {
         if (localStream) {
           localStream.getTracks().forEach(track => track.stop());

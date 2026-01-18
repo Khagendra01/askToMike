@@ -14,6 +14,7 @@ from config import Config
 from services.token_server import TokenServer
 from services.redis_service import RedisService
 from services.shared_state import SharedStateService
+from services.conversation_storage_service import ConversationStorageService
 from agent import entrypoint
 
 
@@ -25,12 +26,22 @@ class Application:
         self.token_server = TokenServer(config)
         self.redis_service = RedisService(config)
         self.shared_state = SharedStateService(config)
+        self.conversation_storage = ConversationStorageService(config) if config.mongodb_uri else None
         self.server: Optional[AgentServer] = None
     
     async def start(self) -> None:
         """Start all services"""
         # Start token server
         await self.token_server.start()
+        
+        # Ensure vector search index exists (non-blocking check)
+        if self.conversation_storage:
+            try:
+                await self.conversation_storage.ensure_vector_index(wait_until_ready=False)
+            except Exception as e:
+                print(f"⚠️ Warning: Could not ensure vector search index: {e}")
+                print("   Vector search will not work until index is created.")
+                print("   See conversation_storage_service.py documentation for manual setup.")
         
         # Verify credentials
         if not self.config.livekit_api_key or not self.config.livekit_api_secret:

@@ -4,6 +4,7 @@ Simple Google Calendar Service (Service Account)
 Uses hardcoded service account credentials for solo testing.
 """
 
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from pathlib import Path
@@ -46,14 +47,17 @@ class CalendarService:
         service = self._get_service()
         now = datetime.utcnow().isoformat() + 'Z'
         
-        result = service.events().list(
-            calendarId=CALENDAR_ID,
-            timeMin=now,
-            maxResults=max_results,
-            singleEvents=True,
-            orderBy='startTime'
-        ).execute()
+        # Run synchronous Google API call in thread pool to avoid blocking
+        def _list_events_sync():
+            return service.events().list(
+                calendarId=CALENDAR_ID,
+                timeMin=now,
+                maxResults=max_results,
+                singleEvents=True,
+                orderBy='startTime'
+            ).execute()
         
+        result = await asyncio.to_thread(_list_events_sync)
         return result.get('items', [])
     
     async def create_event(
@@ -73,10 +77,19 @@ class CalendarService:
             'end': {'dateTime': end_time.isoformat(), 'timeZone': 'America/Los_Angeles'},
         }
         
-        return service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
+        # Run synchronous Google API call in thread pool to avoid blocking
+        def _create_event_sync():
+            return service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
+        
+        return await asyncio.to_thread(_create_event_sync)
     
     async def delete_event(self, event_id: str) -> bool:
         """Delete a calendar event by ID"""
         service = self._get_service()
-        service.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
-        return True
+        
+        # Run synchronous Google API call in thread pool to avoid blocking
+        def _delete_event_sync():
+            service.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
+            return True
+        
+        return await asyncio.to_thread(_delete_event_sync)

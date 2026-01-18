@@ -95,7 +95,9 @@ class MongoService:
         
         if db_name:
             return self._client[db_name]
-        return self._db or self.connect()
+        if self._db is not None:
+            return self._db
+        return self.connect()
     
     def get_collection(self, collection_name: str, db_name: Optional[str] = None) -> Any:
         """Get a collection from the database"""

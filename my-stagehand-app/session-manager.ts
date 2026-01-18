@@ -20,7 +20,8 @@ export interface SessionInfo {
   contextId?: string; // For Browserbase
   userDataDir?: string; // For local browser
   sessionId?: string; // Current Browserbase session ID
-  connectUrl?: string; // Current Browserbase connect URL
+  connectUrl?: string; // Current Browserbase connect URL (CDP WebSocket)
+  viewerUrl?: string; // Viewer/embed URL for frontend display (if available)
 }
 
 export interface StagehandSession {
@@ -234,10 +235,22 @@ export class SessionManager {
 
     console.log(`☁️ Starting BROWSERBASE session...`);
 
-    // Create a context that will persist login cookies
-    const context = await bb.contexts.create({
-      projectId: process.env.BROWSERBASE_PROJECT_ID!,
-    });
+    // Check if we already have a saved context to reuse
+    const savedSessionInfo = this.loadSessionInfo();
+    let context;
+    
+    if (savedSessionInfo?.contextId) {
+      console.log(`🔄 Reusing existing context: ${savedSessionInfo.contextId}`);
+      // Try to reuse the existing context (Browserbase contexts persist cookies)
+      // We'll still create a new session, but use the existing context ID
+      context = { id: savedSessionInfo.contextId };
+    } else {
+      console.log(`✨ Creating new context for login...`);
+      // Create a new context only if we don't have one saved
+      context = await bb.contexts.create({
+        projectId: process.env.BROWSERBASE_PROJECT_ID!,
+      });
+    }
 
     // Start a browser session using that context
     const session = await bb.sessions.create({
@@ -252,6 +265,20 @@ export class SessionManager {
       },
     });
 
+    // Get live viewer URL using sessions.debug() method (similar to browser-use live.browser-use.com pattern)
+    // This returns debuggerFullscreenUrl which can be embedded in frontend iframe
+    let viewerUrl: string | undefined;
+    try {
+      const debugInfo = await bb.sessions.debug(session.id);
+      viewerUrl = debugInfo.debuggerFullscreenUrl || undefined;
+      if (viewerUrl) {
+        console.log(`✅ Live viewer URL obtained: ${viewerUrl.substring(0, 60)}...`);
+      }
+    } catch (error) {
+      console.warn(`⚠️  Could not get live viewer URL from sessions.debug(): ${error}`);
+      console.warn(`   Session will still work, but live viewer URL won't be available`);
+    }
+
     // Connect Playwright to the Browserbase session
     const browser = await chromium.connectOverCDP(session.connectUrl);
     const page = browser.contexts()[0].pages()[0];
@@ -261,6 +288,7 @@ export class SessionManager {
       contextId: context.id,
       sessionId: session.id,
       connectUrl: session.connectUrl,
+      viewerUrl: viewerUrl, // Live viewer URL for frontend embedding
     };
 
     const cleanup = async () => {
