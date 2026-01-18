@@ -97,6 +97,9 @@ class XAgent(Agent):
         
         Args:
             post_content: The X/Twitter post text content (max 280 characters for standard posts)
-            image_description: Optional description for generating an image. When the user asks to "generate an image" or "generate image description", both mean the same thing - provide a description here and an image will be automatically generated from it.
+            image_description: Optional description for generating an image.
+                CRITICAL: Only provide this if the user has EXPLICITLY confirmed the image description.
+                Never auto-generate or assume an image description. If the user hasn't specifically 
+                approved an image description, leave this as None and post text only.
         """
         return await self._post_to_x_impl(post_content, image_description)

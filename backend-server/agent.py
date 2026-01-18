@@ -253,6 +253,10 @@ async def entrypoint(ctx: JobContext):
             """
             Post content to LinkedIn (delegates to LinkedIn agent logic).
             Note: There is a 30-second cooldown between posts to prevent duplicates.
+            
+            IMPORTANT: Only include image_description if the user has explicitly confirmed 
+            what image they want. Never auto-generate an image description without user approval.
+            If the user hasn't mentioned wanting an image, leave image_description as None.
             """
             log_tool_call("post_to_linkedin", self._current_mode, {
                 "post_length": len(post_content),
@@ -275,7 +279,13 @@ async def entrypoint(ctx: JobContext):
             post_content: str,
             image_description: Optional[str] = None
         ):
-            """Post content to X/Twitter (delegates to X agent logic)"""
+            """
+            Post content to X/Twitter (delegates to X agent logic).
+            
+            IMPORTANT: Only include image_description if the user has explicitly confirmed 
+            what image they want. Never auto-generate an image description without user approval.
+            If the user hasn't mentioned wanting an image, leave image_description as None.
+            """
             log_tool_call("post_to_x", self._current_mode, {
                 "post_length": len(post_content),
                 "has_image": image_description is not None
