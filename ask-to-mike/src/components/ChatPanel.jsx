@@ -60,12 +60,12 @@ export default function ChatPanel({
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
               </>
-            ) : (
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white border" />
+            ) : (null
+            //   <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-white border" />
             )}
           </span>
           <span className="text-xs font-medium text-white/50 uppercase tracking-widest">
-            {isConnected ? 'Mike is Online' : 'Mike is Offline'}
+            {isConnected ? 'Mike is Online' : ''}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -101,7 +101,7 @@ export default function ChatPanel({
               className="flex mt-4 items-center gap-2 px-6 py-3 rounded-full bg-primary hover:bg-blue-600 text-white font-medium shadow-lg shadow-primary/30 hover:shadow-primary/50 transition-all duration-200 animate-pulse-glow cursor-pointer"
             >
               <span className="material-symbols-outlined">phone_in_talk</span>
-              Start Conversation
+              Start Yelling
             </button>
           </div>
         ) : (
@@ -153,7 +153,7 @@ export default function ChatPanel({
                   onChange={(e) => setInputText(e.target.value)}
                   onKeyDown={handleKeyDown}
                   className="w-full bg-transparent border-none text-white placeholder-white/40 focus:ring-0 resize-none py-1 px-3 max-h-[120px] text-base leading-relaxed focus:outline-none"
-                  placeholder={isConnected ? "Ask Mike anything..." : "Connect to start chatting..."}
+                  placeholder={isConnected ? "Yell to Mike..." : "Connect to start yelling..."}
                   rows={1}
                   disabled={!isConnected}
                 />

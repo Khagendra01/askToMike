@@ -5,7 +5,7 @@ export default function Header() {
         <div className="flex items-center justify-center size-10 rounded-full bg-primary/20 backdrop-blur-md border border-primary/30 text-primary">
           <span className="material-symbols-outlined">smart_toy</span>
         </div>
-        <h1 className="text-xl font-bold tracking-tight text-white/90">Ask to Mike</h1>
+        <h1 className="text-xl font-bold tracking-tight text-white/90">Yell to Mike</h1>
       </div>
       
       <div className="flex items-center gap-4">
