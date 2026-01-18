@@ -28,6 +28,18 @@ interface LinkedInTask {
   timestamp: number;
 }
 
+interface XTask {
+  type: "x_post";
+  post_text: string;
+  image_url?: string;
+  user_data: {
+    name: string;
+  };
+  timestamp: number;
+}
+
+type Task = LinkedInTask | XTask;
+
 /**
  * Process a LinkedIn post task by executing the linkedin_post.ts script
  * This runs the script with the post text as an environment variable
@@ -71,6 +83,59 @@ async function processLinkedInPost(task: LinkedInTask): Promise<void> {
     }
   } catch (error: any) {
     console.error(`❌ Error processing LinkedIn post: ${error.message}`);
+    if (error.stdout) {
+      console.error(`   stdout: ${error.stdout.substring(0, 500)}`);
+    }
+    if (error.stderr) {
+      console.error(`   stderr: ${error.stderr.substring(0, 500)}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Process an X/Twitter post task by executing the x_post.ts script
+ * This runs the script with the post text as an environment variable
+ */
+async function processXPost(task: XTask): Promise<void> {
+  console.log(`\n📝 Processing X/Twitter post task...`);
+  console.log(`   Post text: ${task.post_text.substring(0, 100)}...`);
+  console.log(`   User: ${task.user_data.name}`);
+  
+  if (task.image_url) {
+    console.log(`   🖼️  Image included: ${task.image_url.substring(0, 100)}...`);
+  }
+
+  try {
+    // Set environment variables for the x_post script
+    // The x_post.ts script reads POST_TEXT and IMAGE_URL from env
+    const env = {
+      ...process.env,
+      POST_TEXT: task.post_text,
+      ...(task.image_url && { IMAGE_URL: task.image_url }),
+    };
+
+    // Execute the x_post.ts script using tsx
+    // This runs the script in a separate process with the environment variables
+    const { stdout, stderr } = await execAsync("tsx x_post.ts", {
+      env,
+      cwd: process.cwd(),
+    });
+
+    if (stdout) {
+      console.log(`✅ X/Twitter post completed successfully`);
+      // Only show first few lines of output to avoid clutter
+      const outputLines = stdout.split("\n").slice(0, 5).join("\n");
+      if (outputLines) {
+        console.log(`   Output:\n${outputLines}`);
+      }
+    }
+
+    if (stderr && !stderr.includes("Warning")) {
+      console.warn(`⚠️  Warnings: ${stderr.substring(0, 200)}`);
+    }
+  } catch (error: any) {
+    console.error(`❌ Error processing X/Twitter post: ${error.message}`);
     if (error.stdout) {
       console.error(`   stdout: ${error.stdout.substring(0, 500)}`);
     }
@@ -160,7 +225,7 @@ async function main() {
 
         try {
           // Parse the task JSON
-          const task: LinkedInTask = JSON.parse(taskData);
+          const task: Task = JSON.parse(taskData);
           console.log(`   Task type: ${task.type}`);
           console.log(`   Timestamp: ${new Date(task.timestamp * 1000).toISOString()}`);
           if (task.image_url) {
@@ -169,9 +234,11 @@ async function main() {
 
           // Process the task based on type
           if (task.type === "linkedin_post") {
-            await processLinkedInPost(task);
+            await processLinkedInPost(task as LinkedInTask);
+          } else if (task.type === "x_post") {
+            await processXPost(task as XTask);
           } else {
-            console.warn(`⚠️  Unknown task type: ${task.type}`);
+            console.warn(`⚠️  Unknown task type: ${(task as any).type}`);
           }
         } catch (parseError: any) {
           console.error(`❌ Error parsing task: ${parseError.message}`);
