@@ -476,15 +476,50 @@ async def entrypoint(ctx: JobContext):
                             pass
                     result_text += f"Messages: {message_count}, Relevance: {score:.3f})\n"
                     
-                    # Show a few key messages from the conversation
+                    # Show relevant messages from the conversation
                     if messages:
-                        # Show user and assistant messages (limit to 3-4)
-                        shown_messages = [m for m in messages if m.get("role") in ["user", "assistant"]][:4]
+                        # Filter to user and assistant messages
+                        all_messages = [m for m in messages if m.get("role") in ["user", "assistant", "tool_result"]]
+                        
+                        # Try to find messages that match the query (keyword matching)
+                        # Split query into words for better matching
+                        query_words = [w.lower() for w in query.split() if len(w) > 2]
+                        
+                        def message_relevance(msg):
+                            """Score how relevant a message is to the query"""
+                            text = msg.get("message", "").lower()
+                            score = 0
+                            for word in query_words:
+                                if word in text:
+                                    score += text.count(word)
+                            return score
+                        
+                        # Score all messages and get the most relevant ones
+                        scored_messages = [(m, message_relevance(m)) for m in all_messages]
+                        relevant_messages = [m for m, score in scored_messages if score > 0]
+                        
+                        # If we found relevant messages, show those
+                        if relevant_messages:
+                            # Sort by relevance and take top 8
+                            relevant_messages = sorted(
+                                [(m, message_relevance(m)) for m in relevant_messages],
+                                key=lambda x: x[1],
+                                reverse=True
+                            )
+                            shown_messages = [m for m, _ in relevant_messages[:8]]
+                            result_text += f"   (Found {len(relevant_messages)} relevant message(s), showing top {len(shown_messages)})\n"
+                        else:
+                            # No keyword matches - show first 2 and last 6 messages
+                            first_msgs = all_messages[:2]
+                            last_msgs = all_messages[-6:] if len(all_messages) > 8 else all_messages[2:]
+                            shown_messages = first_msgs + last_msgs
+                            result_text += f"   (No exact keyword match, showing first/last from {len(all_messages)} messages)\n"
+                        
                         for msg in shown_messages:
                             role = msg.get("role", "unknown")
-                            message_text = msg.get("message", "")[:200]  # Truncate long messages
+                            message_text = msg.get("message", "")[:400]  # Show more text
                             result_text += f"   {role}: {message_text}"
-                            if len(msg.get("message", "")) > 200:
+                            if len(msg.get("message", "")) > 400:
                                 result_text += "..."
                             result_text += "\n"
                     
@@ -775,16 +810,62 @@ async def entrypoint(ctx: JobContext):
                                             parts.append(part)
                                     content = ' '.join(parts)
                             
-                            if role in ['user', 'assistant'] and content and str(content).strip():
+                            # Also capture tool calls for better conversation history
+                            tool_call_info = None
+                            tool_call_names = []
+                            if hasattr(item, 'tool_calls') and item.tool_calls:
+                                for tc in item.tool_calls:
+                                    # Handle different tool call structures
+                                    name = None
+                                    if hasattr(tc, 'name'):
+                                        name = tc.name
+                                    elif hasattr(tc, 'function') and hasattr(tc.function, 'name'):
+                                        name = tc.function.name
+                                    elif isinstance(tc, dict):
+                                        name = tc.get('name') or tc.get('function', {}).get('name')
+                                    if name:
+                                        tool_call_names.append(name)
+                                if tool_call_names:
+                                    tool_call_info = f"[Called tools: {', '.join(tool_call_names)}]"
+                            
+                            agent_name = getattr(unified_agent, '_current_mode', 'basic')
+                            
+                            # Capture user and assistant messages
+                            if role in ['user', 'assistant']:
+                                # For assistant messages with tool calls but no text content,
+                                # still capture the tool call info
+                                if role == 'assistant' and tool_call_info and (not content or not str(content).strip()):
+                                    _saved_message_ids.add(item_id)
+                                    try:
+                                        await shared_state.add_conversation(agent_name, "assistant", tool_call_info)
+                                        logger.info(f"💾 Captured assistant tool call: {tool_call_info[:60]}...")
+                                    except Exception as e:
+                                        logger.error(f"❌ Failed to save tool call: {e}")
+                                elif content and str(content).strip():
+                                    content = str(content).strip()
+                                    # Append tool call info to assistant messages if present
+                                    if role == 'assistant' and tool_call_info:
+                                        content = f"{content} {tool_call_info}"
+                                    _saved_message_ids.add(item_id)
+                                    try:
+                                        await shared_state.add_conversation(agent_name, role, content)
+                                        logger.info(f"💾 Captured {role}: {content[:60]}...")
+                                    except Exception as e:
+                                        logger.error(f"❌ Failed to save message: {e}")
+                            
+                            # Also capture tool/function messages (tool results)
+                            elif role in ['tool', 'function'] and content and str(content).strip():
                                 content = str(content).strip()
                                 _saved_message_ids.add(item_id)
                                 
-                                agent_name = getattr(unified_agent, '_current_mode', 'basic')
+                                # Store tool results as a special "tool_result" role for searchability
                                 try:
-                                    await shared_state.add_conversation(agent_name, role, content)
-                                    logger.info(f"💾 Captured {role}: {content[:60]}...")
+                                    tool_name = getattr(item, 'name', None) or getattr(item, 'tool_call_id', 'tool')
+                                    tool_content = f"[Tool: {tool_name}] {content[:500]}"  # Truncate long results
+                                    await shared_state.add_conversation(agent_name, "tool_result", tool_content)
+                                    logger.info(f"💾 Captured tool_result: {tool_content[:60]}...")
                                 except Exception as e:
-                                    logger.error(f"❌ Failed to save message: {e}")
+                                    logger.error(f"❌ Failed to save tool result: {e}")
                                     
                 except Exception as e:
                     # Only log if it's not a common "no messages yet" error

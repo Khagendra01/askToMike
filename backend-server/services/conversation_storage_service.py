@@ -77,22 +77,65 @@ class ConversationStorageService:
         if not messages:
             raise ValueError("Cannot save empty conversation")
         
+        # Extract key actions/tools used for better searchability
+        actions_taken = []
+        for msg in messages:
+            message_text = msg.get('message', '').lower()
+            # Detect tool calls and actions
+            if 'linkedin' in message_text and ('post' in message_text or 'queue' in message_text):
+                actions_taken.append("LinkedIn post created")
+            if 'calendar' in message_text and ('created' in message_text or 'event' in message_text):
+                actions_taken.append("Calendar event created")
+            if 'slack' in message_text and ('message' in message_text or 'sent' in message_text):
+                actions_taken.append("Slack message sent")
+            if 'twitter' in message_text or 'x post' in message_text:
+                actions_taken.append("Twitter/X post created")
+            if '[tool:' in message_text or '[called tools:' in message_text:
+                actions_taken.append(f"Tool used: {message_text[:100]}")
+        
+        # Remove duplicates while preserving order
+        actions_taken = list(dict.fromkeys(actions_taken))
+        
         # Combine all messages into a single searchable text
         conversation_text = "\n".join([
             f"{msg.get('role', 'unknown')}: {msg.get('message', '')}"
             for msg in messages
         ])
         
-        # Create embeddings for the full conversation
+        # Add actions summary at the end for better embedding
+        if actions_taken:
+            actions_summary = "\n\nACTIONS TAKEN IN THIS CONVERSATION:\n" + "\n".join(f"- {a}" for a in actions_taken)
+            conversation_text += actions_summary
+            print(f"   📋 Actions detected: {actions_taken}")
+        
+        # Create embeddings for the full conversation (with retry for rate limits)
         vo = self._get_voyage_client()
-        try:
-            emb_result = vo.embed(
-                texts=[conversation_text],
-                model=self.embedding_model
-            )
-            embedding = emb_result.embeddings[0]
-        except Exception as e:
-            raise RuntimeError(f"Failed to generate embedding: {e}") from e
+        embedding = None
+        max_retries = 3
+        retry_delay = 20  # seconds - Voyage free tier is 3 RPM, so wait 20s between retries
+        
+        for attempt in range(max_retries):
+            try:
+                emb_result = vo.embed(
+                    texts=[conversation_text],
+                    model=self.embedding_model
+                )
+                embedding = emb_result.embeddings[0]
+                break  # Success, exit retry loop
+            except Exception as e:
+                error_str = str(e).lower()
+                is_rate_limit = "rate" in error_str or "limit" in error_str or "429" in error_str
+                
+                if is_rate_limit and attempt < max_retries - 1:
+                    wait_time = retry_delay * (attempt + 1)  # Exponential backoff
+                    print(f"⏳ Voyage API rate limited, waiting {wait_time}s before retry {attempt + 2}/{max_retries}...")
+                    import time
+                    time.sleep(wait_time)
+                else:
+                    raise RuntimeError(f"Failed to generate embedding: {e}") from e
+        
+        if embedding is None:
+            raise RuntimeError("Failed to generate embedding after all retries")
         
         # Create document
         doc_id = str(uuid.uuid4())
@@ -135,15 +178,33 @@ class ConversationStorageService:
         Returns:
             List of matching conversation documents with similarity scores
         """
-        # Generate query embedding
+        # Generate query embedding (with retry for rate limits)
         vo = self._get_voyage_client()
-        try:
-            query_emb = vo.embed(
-                texts=[query],
-                model=self.embedding_model
-            ).embeddings[0]
-        except Exception as e:
-            raise RuntimeError(f"Failed to generate query embedding: {e}") from e
+        query_emb = None
+        max_retries = 3
+        retry_delay = 20  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                query_emb = vo.embed(
+                    texts=[query],
+                    model=self.embedding_model
+                ).embeddings[0]
+                break  # Success
+            except Exception as e:
+                error_str = str(e).lower()
+                is_rate_limit = "rate" in error_str or "limit" in error_str or "429" in error_str
+                
+                if is_rate_limit and attempt < max_retries - 1:
+                    wait_time = retry_delay * (attempt + 1)
+                    print(f"⏳ Voyage API rate limited, waiting {wait_time}s before retry {attempt + 2}/{max_retries}...")
+                    import time
+                    time.sleep(wait_time)
+                else:
+                    raise RuntimeError(f"Failed to generate query embedding: {e}") from e
+        
+        if query_emb is None:
+            raise RuntimeError("Failed to generate query embedding after all retries")
         
         # Build aggregation pipeline for vector search
         pipeline = [
