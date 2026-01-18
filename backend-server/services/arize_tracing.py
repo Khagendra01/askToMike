@@ -76,13 +76,15 @@ def init_arize_tracing(project_name: str = "delegate-voice-agent") -> bool:
                 "model_id": project_name,  # Alternative attribute Arize accepts
             })
             
-            # Create OTLP HTTP exporter for Arize
+            # Create OTLP HTTP exporter for Arize with longer timeout
+            # Default is 10s which can cause timeouts; increase to 30s for reliability
             otlp_exporter = OTLPSpanExporter(
                 endpoint="https://otlp.arize.com/v1/traces",
                 headers={
                     "space_id": space_id,
                     "api_key": api_key,
-                }
+                },
+                timeout=30,  # 30 second timeout (default is 10s)
             )
             
             # Create and set tracer provider
