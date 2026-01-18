@@ -465,6 +465,57 @@ async def entrypoint(ctx: JobContext):
             return status
         
         @function_tool
+        async def send_linkedin_message(
+            self,
+            context: RunContext,
+            message: str
+        ) -> str:
+            """
+            Send a direct message to Suman Sah on LinkedIn.
+            
+            IMPORTANT: Before calling this function, you MUST first tell the user what message 
+            you plan to send and get their explicit confirmation. Only call this after the user 
+            confirms the message content.
+            
+            Args:
+                message: The message content to send.
+            
+            Returns:
+                Confirmation that the message was queued for sending.
+            """
+            log_tool_call("send_linkedin_message", self._current_mode, {
+                "message_length": len(message)
+            })
+            
+            # The recipient is always Suman Sah
+            full_name = "Suman Sah"
+            
+            logger.info(f"📬 Sending LinkedIn message to {full_name}")
+            logger.info(f"   Message ({len(message)} chars): {message[:150]}...")
+            
+            # Queue the message via Redis if available
+            if self._router and self._router._redis_service:
+                try:
+                    task = {
+                        "type": "linkedin_message",
+                        "full_name": full_name,
+                        "message": message,
+                        "user_data": self._router._config.user_data if self._router._config else {},
+                        "timestamp": asyncio.get_event_loop().time()
+                    }
+                    await self._router._redis_service.push_task(task)
+                    
+                    logger.info(f"✅ Queued LinkedIn message to {full_name}")
+                    return f"✅ Done! I've queued your LinkedIn message to {full_name}. It will be sent shortly."
+                except Exception as e:
+                    logger.warning(f"⚠️ Redis not available, message not queued: {e}")
+                    return f"⚠️ Could not queue message: {str(e)}"
+            
+            # If no Redis, just log the message (mock mode)
+            logger.info(f"📋 LinkedIn message (mock - no Redis) to {full_name}: {message[:100]}...")
+            return f"✅ LinkedIn message prepared for {full_name}: {message[:100]}..."
+        
+        @function_tool
         async def post_to_x(
             self,
             context: RunContext,

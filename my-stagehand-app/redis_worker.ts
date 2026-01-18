@@ -38,7 +38,17 @@ interface XTask {
   timestamp: number;
 }
 
-type Task = LinkedInTask | XTask;
+interface LinkedInMessageTask {
+  type: "linkedin_message";
+  full_name: string;
+  message: string;
+  user_data: {
+    name: string;
+  };
+  timestamp: number;
+}
+
+type Task = LinkedInTask | XTask | LinkedInMessageTask;
 
 /**
  * Process a LinkedIn post task by executing the linkedin_post.ts script
@@ -83,6 +93,55 @@ async function processLinkedInPost(task: LinkedInTask): Promise<void> {
     }
   } catch (error: any) {
     console.error(`❌ Error processing LinkedIn post: ${error.message}`);
+    if (error.stdout) {
+      console.error(`   stdout: ${error.stdout.substring(0, 500)}`);
+    }
+    if (error.stderr) {
+      console.error(`   stderr: ${error.stderr.substring(0, 500)}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Process a LinkedIn message task by executing the linkedin_message_dm.ts script
+ * This runs the script with the full name and message as CLI arguments
+ */
+async function processLinkedInMessage(task: LinkedInMessageTask): Promise<void> {
+  console.log(`\n📬 Processing LinkedIn message task...`);
+  console.log(`   Recipient: ${task.full_name}`);
+  console.log(`   Message: ${task.message.substring(0, 100)}...`);
+  console.log(`   User: ${task.user_data.name}`);
+
+  try {
+    // Execute the linkedin_message_dm.ts script using tsx
+    // The script expects: tsx linkedin_message_dm.ts <Full Name> <Message>
+    const escapedFullName = task.full_name.replace(/"/g, '\\"');
+    const escapedMessage = task.message.replace(/"/g, '\\"');
+    
+    const { stdout, stderr } = await execAsync(
+      `tsx linkedin_message_dm.ts "${escapedFullName}" "${escapedMessage}"`,
+      {
+        env: process.env,
+        cwd: process.cwd(),
+        timeout: 120000, // 2 minute timeout for message sending
+      }
+    );
+
+    if (stdout) {
+      console.log(`✅ LinkedIn message sent successfully`);
+      // Only show first few lines of output to avoid clutter
+      const outputLines = stdout.split("\n").slice(0, 5).join("\n");
+      if (outputLines) {
+        console.log(`   Output:\n${outputLines}`);
+      }
+    }
+
+    if (stderr && !stderr.includes("Warning")) {
+      console.warn(`⚠️  Warnings: ${stderr.substring(0, 200)}`);
+    }
+  } catch (error: any) {
+    console.error(`❌ Error processing LinkedIn message: ${error.message}`);
     if (error.stdout) {
       console.error(`   stdout: ${error.stdout.substring(0, 500)}`);
     }
@@ -228,7 +287,7 @@ async function main() {
           const task: Task = JSON.parse(taskData);
           console.log(`   Task type: ${task.type}`);
           console.log(`   Timestamp: ${new Date(task.timestamp * 1000).toISOString()}`);
-          if (task.image_url) {
+          if ('image_url' in task && task.image_url) {
             console.log(`   🖼️  Image URL provided: ${task.image_url.substring(0, 80)}...`);
           }
 
@@ -237,6 +296,8 @@ async function main() {
             await processLinkedInPost(task as LinkedInTask);
           } else if (task.type === "x_post") {
             await processXPost(task as XTask);
+          } else if (task.type === "linkedin_message") {
+            await processLinkedInMessage(task as LinkedInMessageTask);
           } else {
             console.warn(`⚠️  Unknown task type: ${(task as any).type}`);
           }
