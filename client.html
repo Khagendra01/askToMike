@@ -101,6 +101,16 @@
     let room = null;
     let localStream = null;
 
+    // Get or create a persistent user identity
+    function getUserIdentity() {
+      let identity = sessionStorage.getItem("livekit-identity");
+      if (!identity) {
+        identity = `user-${Date.now()}`;
+        sessionStorage.setItem("livekit-identity", identity);
+      }
+      return identity;
+    }
+
     function log(msg, type = "info") {
       const li = document.createElement("li");
       const timestamp = new Date().toLocaleTimeString();
@@ -127,7 +137,7 @@
 
         // Get token from backend server
         const roomName = "my-room";
-        const identity = `user-${Date.now()}`;
+        const identity = getUserIdentity();
         const resp = await fetch(`http://localhost:8080/api/token?room=${roomName}&identity=${identity}`);
         
         if (!resp.ok) {

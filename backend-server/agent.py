@@ -6,6 +6,7 @@ Routes user requests to appropriate agents based on user intent.
 
 import os
 import asyncio
+import logging
 from typing import Optional
 
 from livekit.agents import AgentSession, JobContext, inference, llm, Agent, function_tool, RunContext
@@ -26,8 +27,20 @@ from services.tts_service import SystemTTS
 from agents.agent_router import AgentRouter
 from utils.logger import (
     get_logger, get_agent_logger, get_router_logger, 
-    log_agent_switch, log_tool_call, log_cross_agent_data_flow
+    log_agent_switch, log_tool_call,
+    setup_logging
 )
+
+# Setup logging for worker process (idempotent - won't duplicate if already set up)
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+log_level_map = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
+setup_logging(level=log_level_map.get(log_level, logging.INFO), use_colors=True)
 
 logger = get_logger(__name__)
 
@@ -38,6 +51,22 @@ async def entrypoint(ctx: JobContext):
     try:
         await ctx.connect()
         logger.info(f"✅ Connected to room: {ctx.room.name}")
+        
+        # Log existing participants
+        for participant in ctx.room.remote_participants.values():
+            logger.info(f"👤 Existing participant: {participant.identity}")
+            for track_pub in participant.track_publications.values():
+                logger.info(f"   📡 Track: {track_pub.kind} - {track_pub.source}")
+        
+        # Add event handlers for debugging
+        @ctx.room.on("track_subscribed")
+        def on_track_subscribed(track, publication, participant):
+            logger.info(f"📡 Track subscribed: {track.kind} from {participant.identity}")
+        
+        @ctx.room.on("participant_connected")
+        def on_participant_connected(participant):
+            logger.info(f"👤 Participant connected: {participant.identity}")
+        
     except Exception as e:
         logger.error(f"❌ Failed to connect to room: {e}", exc_info=True)
         return
@@ -79,9 +108,9 @@ async def entrypoint(ctx: JobContext):
 
     def _init_system_tts():
         try:
-            logger.info("🔊 Initializing System TTS (pyttsx3)...")
+            logger.info("🔊 Initializing System TTS...")
             system_tts = SystemTTS()
-            logger.info("✅ System TTS initialized")
+            logger.info("✅ System TTS initialized successfully")
             return system_tts
         except Exception as e:
             logger.warning(f"❌ Failed to initialize System TTS: {e}", exc_info=True)
@@ -206,8 +235,8 @@ async def entrypoint(ctx: JobContext):
             if not self._router:
                 return None, "Router not available"
             linkedin_agent = self._router.create_agent('linkedin', self._router.get_agent_system_prompt('linkedin'))
-            if hasattr(linkedin_agent, 'post_to_linkedin'):
-                return await linkedin_agent.post_to_linkedin(context, post_content, image_description)
+            if hasattr(linkedin_agent, '_post_to_linkedin_impl'):
+                return await linkedin_agent._post_to_linkedin_impl(post_content, image_description)
             return None, "LinkedIn posting not available"
         
         @function_tool
@@ -216,9 +245,7 @@ async def entrypoint(ctx: JobContext):
             if not self._router:
                 return "Router not available"
             slack_agent = self._router.create_agent('slack', self._router.get_agent_system_prompt('slack'))
-            if hasattr(slack_agent, 'list_slack_channels'):
-                return await slack_agent.list_slack_channels(context)
-            return "Slack not available"
+            return await slack_agent._list_slack_channels_impl()
         
         @function_tool
         async def read_slack_channel(self, context: RunContext, channel_name: str) -> str:
@@ -226,9 +253,7 @@ async def entrypoint(ctx: JobContext):
             if not self._router:
                 return "Router not available"
             slack_agent = self._router.create_agent('slack', self._router.get_agent_system_prompt('slack'))
-            if hasattr(slack_agent, 'read_slack_channel'):
-                return await slack_agent.read_slack_channel(context, channel_name)
-            return "Slack not available"
+            return await slack_agent._read_slack_channel_impl(channel_name)
         
         @function_tool
         async def send_slack_message(self, context: RunContext, channel_name: str, message: str) -> str:
@@ -236,36 +261,8 @@ async def entrypoint(ctx: JobContext):
             if not self._router:
                 return "Router not available"
             slack_agent = self._router.create_agent('slack', self._router.get_agent_system_prompt('slack'))
-            if hasattr(slack_agent, 'send_slack_message'):
-                return await slack_agent.send_slack_message(context, channel_name, message)
-            return "Slack not available"
+            return await slack_agent._send_slack_message_impl(channel_name, message)
         
-        @function_tool
-        async def get_conversation_context(self, context: RunContext) -> str:
-            """Get recent conversation context"""
-            if not self._shared_state:
-                return "No shared state available"
-            history = await self._shared_state.get_conversation_history(self._current_mode, limit=5)
-            if not history:
-                return "No previous conversation context"
-            context_str = "Recent conversation:\n"
-            for entry in reversed(history):
-                role = entry.get("role", "unknown")
-                message = entry.get("message", "")
-                context_str += f"{role}: {message}\n"
-            return context_str
-        
-        @function_tool
-        async def get_slack_channel_data(self, context: RunContext, channel_name: Optional[str] = None) -> str:
-            """Get Slack channel messages from shared state (for cross-agent data access)"""
-            log_tool_call("get_slack_channel_data", self._current_mode, {"channel": channel_name})
-            log_cross_agent_data_flow("slack", "linkedin", "channel_messages", channel_name or "last_read")
-            if not self._router:
-                return "Router not available"
-            linkedin_agent = self._router.create_agent('linkedin', self._router.get_agent_system_prompt('linkedin'))
-            if hasattr(linkedin_agent, 'get_slack_channel_data'):
-                return await linkedin_agent.get_slack_channel_data(context, channel_name)
-            return "Slack data access not available"
         
         @function_tool
         async def search_web(

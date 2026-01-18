@@ -130,6 +130,8 @@ Your role is to help with LinkedIn posting tasks:
 - When user mentions creating a post based on Slack, first retrieve the Slack data, then help craft the LinkedIn post
 - Be conversational and helpful
 
+CRITICAL: After calling any tool, you MUST speak the results to the user. Never just call a tool silently - always verbally summarize or confirm the action in a conversational way.
+
 Important: Don't use any unpronounceable characters in your speech."""
         
         elif agent_type == 'slack':
@@ -139,6 +141,8 @@ Your role is to help with Slack communication:
 - You can list channels, read messages, and send messages to Slack
 - Use the available Slack functions to interact with channels
 - Be helpful and concise
+
+CRITICAL: After calling any tool (like list_slack_channels, read_slack_channel, etc.), you MUST speak the results to the user. Never just call a tool silently - always verbally summarize or read out the results in a conversational way. For example, after listing channels, say something like "Here are your Slack channels: general, random, engineering..." etc.
 
 Important: Don't use any unpronounceable characters in your speech."""
         
@@ -154,6 +158,8 @@ You have access to web search capabilities - use the `search_web` function when 
 - Research questions that need up-to-date sources
 
 If the user mentions LinkedIn or Slack, you can acknowledge it, but for specific actions, they should be routed to the appropriate agent.
+
+CRITICAL: After calling any tool, you MUST speak the results to the user. Never just call a tool silently - always verbally summarize the results in a conversational way.
 
 Important: Don't use any unpronounceable characters in your speech."""
 

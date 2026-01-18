@@ -39,13 +39,14 @@ class Application:
         print(f"🔗 AgentServer will connect to: {self.config.livekit_url}")
         print(f"🔑 Using API Key: {self.config.livekit_api_key[:10]}...")
         
-        # Create AgentServer
+        # Create AgentServer with no prewarmed processes - spawn on demand only
         self.server = AgentServer.from_server_options(
             WorkerOptions(
                 entrypoint_fnc=entrypoint,
                 ws_url=self.config.livekit_url,
                 api_key=self.config.livekit_api_key,
                 api_secret=self.config.livekit_api_secret,
+                num_idle_processes=0,  # No prewarmed processes - spawn on demand
             )
         )
         

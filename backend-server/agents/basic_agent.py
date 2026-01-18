@@ -10,8 +10,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from livekit.agents import Agent, llm, function_tool, RunContext
-from services.shared_state import SharedStateService
-from services.web_search_service import WebSearchService
 from config import Config
 from utils.logger import get_agent_logger, log_tool_call
 
@@ -29,58 +27,13 @@ class BasicAgent(Agent):
         self._agent_name = "basic"
     
     async def on_agent_speech_committed(self, message: llm.ChatMessage):
-        """Log agent speech to shared state"""
+        """Log agent speech"""
         logger.info(f"🤖 Agent: {message.text_content}")
-        if self._shared_state:
-            await self._shared_state.add_conversation(
-                self._agent_name,
-                "assistant",
-                message.text_content
-            )
     
     async def on_user_speech_committed(self, message: llm.ChatMessage):
-        """Log user speech to shared state"""
+        """Log user speech"""
         logger.info(f"🗣️  User: {message.text_content}")
-        if self._shared_state:
-            await self._shared_state.add_conversation(
-                self._agent_name,
-                "user",
-                message.text_content
-            )
     
-    @function_tool
-    async def get_conversation_context(self, context: RunContext) -> str:
-        """
-        Get recent conversation context from shared state.
-        Useful for understanding what was discussed previously.
-        """
-        if not self._shared_state:
-            return "No shared state available"
-        
-        history = await self._shared_state.get_conversation_history(self._agent_name, limit=5)
-        if not history:
-            return "No previous conversation context"
-        
-        context_str = "Recent conversation:\n"
-        for entry in reversed(history):  # Reverse to show chronological order
-            role = entry.get("role", "unknown")
-            message = entry.get("message", "")
-            context_str += f"{role}: {message}\n"
-        
-        return context_str
-    
-    @function_tool
-    async def get_user_preferences(self, context: RunContext) -> str:
-        """
-        Get user preferences and context from shared state.
-        """
-        if not self._shared_state:
-            return "No shared state available"
-        
-        user_data = await self._shared_state.get_state("user_preferences")
-        if user_data:
-            return f"User preferences: {user_data}"
-        return "No user preferences stored"
     
     @function_tool
     async def search_web(

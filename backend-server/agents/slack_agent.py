@@ -6,7 +6,6 @@ This is a demonstration agent with mock functionality.
 """
 
 import asyncio
-import uuid
 from typing import Optional, List, Dict, Any
 
 import sys
@@ -14,9 +13,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from livekit.agents import Agent, llm, function_tool, RunContext
-from services.shared_state import SharedStateService
 from config import Config
-from utils.logger import get_agent_logger, log_tool_call, log_shared_state_operation
+from utils.logger import get_agent_logger, log_tool_call
 
 logger = get_agent_logger("slack")
 
@@ -53,31 +51,15 @@ class SlackAgent(Agent):
         }
     
     async def on_agent_speech_committed(self, message: llm.ChatMessage):
-        """Log agent speech to shared state"""
+        """Log agent speech"""
         logger.info(f"💬 Agent: {message.text_content}")
-        if self._shared_state:
-            await self._shared_state.add_conversation(
-                self._agent_name,
-                "assistant",
-                message.text_content
-            )
     
     async def on_user_speech_committed(self, message: llm.ChatMessage):
-        """Log user speech to shared state"""
+        """Log user speech"""
         logger.info(f"🗣️  User: {message.text_content}")
-        if self._shared_state:
-            await self._shared_state.add_conversation(
-                self._agent_name,
-                "user",
-                message.text_content
-            )
     
-    @function_tool
-    async def list_slack_channels(self, context: RunContext) -> str:
-        """
-        List all Slack channels with unread message counts.
-        Returns a formatted list of channels.
-        """
+    async def _list_slack_channels_impl(self) -> str:
+        """Implementation for listing Slack channels"""
         log_tool_call("list_slack_channels", self._agent_name)
         logger.info("📋 Listing Slack channels (mocked)")
         result = "Slack Channels:\n"
@@ -86,28 +68,18 @@ class SlackAgent(Agent):
             unread_str = f" ({unread} unread)" if unread > 0 else ""
             result += f"- #{channel['name']}{unread_str}\n"
         
-        # Update shared state
-        if self._shared_state:
-            await self._shared_state.set_state(
-                f"{self._agent_name}:channels",
-                self._mock_channels
-            )
-            log_shared_state_operation("set", f"{self._agent_name}:channels", self._agent_name)
-        
         return result
     
     @function_tool
-    async def read_slack_channel(
-        self, 
-        context: RunContext,
-        channel_name: str
-    ) -> str:
+    async def list_slack_channels(self, context: RunContext) -> str:
         """
-        Read messages from a Slack channel.
-        
-        Args:
-            channel_name: Name of the channel to read (e.g., "general", "engineering")
+        List all Slack channels with unread message counts.
+        Returns a formatted list of channels.
         """
+        return await self._list_slack_channels_impl()
+    
+    async def _read_slack_channel_impl(self, channel_name: str) -> str:
+        """Implementation for reading Slack channel messages"""
         log_tool_call("read_slack_channel", self._agent_name, {"channel": channel_name})
         logger.info(f"📖 Reading Slack channel: {channel_name} (mocked)")
         
@@ -125,37 +97,47 @@ class SlackAgent(Agent):
         for msg in messages:
             result += f"[{msg['user']}]: {msg['text']}\n"
         
-        # Update shared state with full message data for cross-agent access
-        if self._shared_state:
-            # Store metadata
-            await self._shared_state.set_state(
-                f"{self._agent_name}:last_read_channel",
-                {"channel": channel_name, "message_count": len(messages)}
-            )
-            # Store full messages for cross-agent access (keyed by channel name)
-            await self._shared_state.set_state(
-                f"{self._agent_name}:channel:{channel_name}",
-                {
-                    "channel": channel_name,
-                    "channel_id": channel["id"],
-                    "messages": messages,
-                    "read_at": asyncio.get_event_loop().time()
-                }
-            )
-            log_shared_state_operation("set", f"{self._agent_name}:channel:{channel_name}", self._agent_name)
-            
-            # Also store in a general context key for easy retrieval
-            await self._shared_state.set_context(
-                "slack_channel_data",
-                {
-                    "last_read_channel": channel_name,
-                    "messages": messages,
-                    "channel_info": channel
-                }
-            )
-            logger.info(f"💾 Stored {len(messages)} messages from #{channel_name} in shared state for cross-agent access")
-        
         return result
+    
+    @function_tool
+    async def read_slack_channel(
+        self, 
+        context: RunContext,
+        channel_name: str
+    ) -> str:
+        """
+        Read messages from a Slack channel.
+        
+        Args:
+            channel_name: Name of the channel to read (e.g., "general", "engineering")
+        """
+        return await self._read_slack_channel_impl(channel_name)
+    
+    async def _send_slack_message_impl(self, channel_name: str, message: str) -> str:
+        """Implementation for sending Slack messages"""
+        log_tool_call("send_slack_message", self._agent_name, {"channel": channel_name})
+        logger.info(f"📤 Sending to #{channel_name}: {message[:100]}...")
+        
+        # Find channel
+        channel = next((c for c in self._mock_channels if c["name"] == channel_name), None)
+        if not channel:
+            return f"Channel #{channel_name} not found"
+        
+        # Mock sending (in real implementation, this would call Slack API)
+        await asyncio.sleep(0.1)  # Simulate network delay
+        
+        # Add to mock messages
+        if channel["id"] not in self._mock_messages:
+            self._mock_messages[channel["id"]] = []
+        
+        self._mock_messages[channel["id"]].append({
+            "user": self._config.user_name if self._config else "User",
+            "text": message,
+            "timestamp": asyncio.get_event_loop().time()
+        })
+        
+        logger.info(f"✅ Message sent to #{channel_name}")
+        return f"Message sent to #{channel_name}: {message}"
     
     @function_tool
     async def send_slack_message(
@@ -171,37 +153,5 @@ class SlackAgent(Agent):
             channel_name: Name of the channel to send to
             message: The message text to send
         """
-        call_id = uuid.uuid4().hex[:8]
-        print(f"\n{'='*60}")
-        print(f"🔧 TOOL CALL #{call_id} - send_slack_message")
-        print(f"📤 Sending to #{channel_name}: {message[:100]}...")
-        print(f"{'='*60}\n")
-        
-        # Find channel
-        channel = next((c for c in self._mock_channels if c["name"] == channel_name), None)
-        if not channel:
-            return f"❌ Channel #{channel_name} not found"
-        
-        # Mock sending (in real implementation, this would call Slack API)
-        await asyncio.sleep(0.1)  # Simulate network delay
-        
-        # Add to mock messages
-        if channel["id"] not in self._mock_messages:
-            self._mock_messages[channel["id"]] = []
-        
-        self._mock_messages[channel["id"]].append({
-            "user": self._config.user_name,
-            "text": message,
-            "timestamp": asyncio.get_event_loop().time()
-        })
-        
-        # Update shared state
-        if self._shared_state:
-            await self._shared_state.set_state(
-                f"{self._agent_name}:last_sent_message",
-                {"channel": channel_name, "message": message, "timestamp": asyncio.get_event_loop().time()}
-            )
-        
-        print(f"✅ [{call_id}] Message sent to #{channel_name}")
-        return f"✅ Message sent to #{channel_name}: {message}"
+        return await self._send_slack_message_impl(channel_name, message)
 

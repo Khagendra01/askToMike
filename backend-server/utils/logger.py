@@ -10,6 +10,9 @@ import sys
 from datetime import datetime
 from typing import Optional
 
+# Track if logging has been set up to prevent duplicate handlers
+_logging_initialized = False
+
 
 class ColoredFormatter(logging.Formatter):
     """Custom formatter with colors for different log levels"""
@@ -40,12 +43,25 @@ def setup_logging(level: int = logging.INFO, use_colors: bool = True) -> None:
         level: Logging level (default: INFO)
         use_colors: Whether to use colored output (default: True)
     """
-    # Create root logger
+    # Get root logger
     root_logger = logging.getLogger()
+    
+    # Check if we already have our custom handler (by checking formatter type)
+    for handler in root_logger.handlers:
+        if hasattr(handler, 'formatter') and isinstance(handler.formatter, ColoredFormatter):
+            # Already set up with our formatter
+            return
+    
     root_logger.setLevel(level)
     
-    # Remove existing handlers
+    # Remove ALL existing handlers from root to prevent duplicates
     root_logger.handlers.clear()
+    
+    # Also clear handlers from common loggers
+    for logger_name in ['agent', 'router', 'observer', 'service', 'agent.basic', 'agent.slack', 'agent.linkedin']:
+        sub_logger = logging.getLogger(logger_name)
+        sub_logger.handlers.clear()
+        sub_logger.propagate = True
     
     # Create console handler
     console_handler = logging.StreamHandler(sys.stdout)
@@ -67,31 +83,10 @@ def setup_logging(level: int = logging.INFO, use_colors: bool = True) -> None:
     root_logger.addHandler(console_handler)
     
     # Suppress noisy library logs
-    logging.getLogger("livekit.agents").setLevel(logging.ERROR)  # Only show errors, not warnings
-    logging.getLogger("livekit").setLevel(logging.ERROR)
+    logging.getLogger("livekit.agents").setLevel(logging.INFO)
+    logging.getLogger("livekit").setLevel(logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    
-    # Suppress specific harmless LiveKit warnings
-    class LiveKitWarningFilter(logging.Filter):
-        """Filter out harmless LiveKit warnings"""
-        def filter(self, record):
-            # Suppress these common harmless warnings
-            harmless_patterns = [
-                "_SegmentSynchronizerImpl.resume called after close",
-                "speech not done in time after interruption",
-                "skipping user input, speech scheduling is paused",
-            ]
-            message = record.getMessage()
-            for pattern in harmless_patterns:
-                if pattern in message:
-                    return False  # Don't log this
-            return True  # Log everything else
-    
-    # Apply filter to livekit loggers
-    livekit_filter = LiveKitWarningFilter()
-    logging.getLogger("livekit.agents").addFilter(livekit_filter)
-    logging.getLogger("livekit").addFilter(livekit_filter)
 
 
 def get_logger(name: str) -> logging.Logger:
