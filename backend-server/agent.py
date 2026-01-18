@@ -28,6 +28,17 @@ from services.web_search_service import WebSearchService
 from services.tts_service import SystemTTS
 from services.conversation_storage_service import ConversationStorageService
 from agents.agent_router import AgentRouter
+from workflows.linkedin_workflow import LinkedInWorkflowRunner
+from services.arize_tracing import (
+    init_arize_tracing,
+    is_arize_enabled,
+    trace_livekit_session,
+    trace_conversation_turn,
+    trace_tool_call,
+    trace_workflow,
+    record_livekit_metrics,
+    record_error,
+)
 from utils.logger import (
     get_logger, get_agent_logger, get_router_logger, 
     log_agent_switch, log_tool_call,
@@ -46,6 +57,9 @@ log_level_map = {
 setup_logging(level=log_level_map.get(log_level, logging.INFO), use_colors=True)
 
 logger = get_logger(__name__)
+
+# Initialize Arize AX tracing (if configured)
+_arize_initialized = init_arize_tracing(project_name="delegate-voice-agent")
 
 
 async def entrypoint(ctx: JobContext):
@@ -186,40 +200,57 @@ async def entrypoint(ctx: JobContext):
             self._conversation_storage = conversation_storage
             self._current_mode = 'basic'  # Track current mode
             self._session_id = None  # Will be set when session starts
+            self._room_name = None  # Will be set when session starts
+            self._turn_count = 0  # Track conversation turns for Arize
+            # LangGraph workflow runners
+            self._linkedin_workflow: Optional[LinkedInWorkflowRunner] = None
         
         async def on_user_speech_committed(self, message: llm.ChatMessage):
             """Route user message and update mode if needed"""
             user_text = message.text_content
             logger.info(f"📝 on_user_speech_committed called with: {user_text[:50]}...")
             
-            # Determine which agent type should handle this
-            agent_type = await self._router.determine_agent(user_text)
+            # Increment turn counter
+            self._turn_count += 1
             
-            if self._current_mode != agent_type:
-                log_agent_switch(self._current_mode, agent_type, f"User intent: {user_text[:50]}...")
-                self._current_mode = agent_type
-                # Update instructions dynamically
-                new_prompt = self._router.get_agent_system_prompt(agent_type)
-                if hasattr(self, '_chat_ctx'):
-                    # Update system message
-                    self._chat_ctx.system = new_prompt
-            
-            # Log to shared state
-            if self._shared_state:
-                try:
-                    await self._shared_state.add_conversation(
-                        self._current_mode,
-                        "user",
-                        user_text
-                    )
-                    logger.info(f"✅ Saved user message to Redis (agent: {self._current_mode})")
-                except Exception as e:
-                    logger.error(f"❌ Failed to save user message to Redis: {e}", exc_info=True)
-            else:
-                logger.warning("⚠️ Shared state not available for saving conversation")
-            
-            agent_logger = get_agent_logger(self._current_mode)
-            agent_logger.info(f"🗣️  User: {user_text}")
+            # Trace this conversation turn with Arize
+            with trace_conversation_turn(
+                session_id=self._session_id or "unknown",
+                turn_number=self._turn_count,
+                user_text=user_text,
+                agent_mode=self._current_mode
+            ) as turn_span:
+                # Determine which agent type should handle this
+                agent_type = await self._router.determine_agent(user_text)
+                
+                if self._current_mode != agent_type:
+                    log_agent_switch(self._current_mode, agent_type, f"User intent: {user_text[:50]}...")
+                    self._current_mode = agent_type
+                    # Update instructions dynamically
+                    new_prompt = self._router.get_agent_system_prompt(agent_type)
+                    if hasattr(self, '_chat_ctx'):
+                        # Update system message
+                        self._chat_ctx.system = new_prompt
+                    # Add agent switch to trace
+                    if turn_span:
+                        turn_span.set_attribute("agent.switched_to", agent_type)
+                
+                # Log to shared state
+                if self._shared_state:
+                    try:
+                        await self._shared_state.add_conversation(
+                            self._current_mode,
+                            "user",
+                            user_text
+                        )
+                        logger.info(f"✅ Saved user message to Redis (agent: {self._current_mode})")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to save user message to Redis: {e}", exc_info=True)
+                else:
+                    logger.warning("⚠️ Shared state not available for saving conversation")
+                
+                agent_logger = get_agent_logger(self._current_mode)
+                agent_logger.info(f"🗣️  User: {user_text}")
         
         async def on_agent_speech_committed(self, message: llm.ChatMessage):
             """Log agent response"""
@@ -271,6 +302,160 @@ async def entrypoint(ctx: JobContext):
             if hasattr(linkedin_agent, '_post_to_linkedin_impl'):
                 return await linkedin_agent._post_to_linkedin_impl(post_content, image_description)
             return None, "LinkedIn posting not available"
+        
+        # =====================================================================
+        # LangGraph-powered LinkedIn Workflow Tools
+        # =====================================================================
+        
+        @function_tool
+        async def start_linkedin_draft(
+            self,
+            context: RunContext,
+            topic: str
+        ) -> str:
+            """
+            Start a LinkedIn post drafting workflow using LangGraph.
+            This creates a draft post based on the topic and allows for iterative refinement.
+            
+            Use this when the user wants to create a LinkedIn post and you want to:
+            - Generate a professional draft
+            - Allow the user to review and request changes
+            - Handle image requests through a structured flow
+            - Get explicit confirmation before posting
+            
+            Args:
+                topic: What the LinkedIn post should be about (e.g., "AI trends in 2026", "my recent project launch")
+            
+            Returns:
+                The generated draft post for user review
+            """
+            log_tool_call("start_linkedin_draft", self._current_mode, {"topic": topic[:50]})
+            logger.info(f"🚀 Starting LangGraph LinkedIn workflow for: {topic[:50]}...")
+            
+            # Trace this tool call with Arize
+            with trace_tool_call("start_linkedin_draft", self._current_mode, {
+                "topic_length": len(topic),
+                "topic_preview": topic[:100]
+            }):
+                try:
+                    # Create new workflow runner
+                    self._linkedin_workflow = LinkedInWorkflowRunner()
+                    
+                    # Trace the workflow execution
+                    with trace_workflow("linkedin_post", self._session_id or "unknown", topic):
+                        # Start the workflow - this generates the initial draft
+                        response = await self._linkedin_workflow.start(topic)
+                    
+                    logger.info(f"✅ LinkedIn draft workflow started, stage: {self._linkedin_workflow.current_stage}")
+                    return response
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error starting LinkedIn workflow: {e}", exc_info=True)
+                    record_error("workflow_start_error", str(e), {
+                        "workflow": "linkedin",
+                        "topic": topic[:100]
+                    })
+                    self._linkedin_workflow = None
+                    return f"Error starting LinkedIn draft workflow: {str(e)}"
+        
+        @function_tool
+        async def continue_linkedin_draft(
+            self,
+            context: RunContext,
+            user_feedback: str
+        ) -> str:
+            """
+            Continue an active LinkedIn drafting workflow with user feedback.
+            
+            Use this when:
+            - User provides feedback on a draft (e.g., "make it shorter", "add more hashtags")
+            - User confirms they want to post (e.g., "yes", "looks good", "post it")
+            - User wants to add an image (e.g., "add an image of...")
+            - User wants to cancel (e.g., "nevermind", "cancel")
+            
+            Args:
+                user_feedback: The user's response to the current draft or workflow state
+            
+            Returns:
+                The workflow's response (revised draft, confirmation, or final result)
+            """
+            log_tool_call("continue_linkedin_draft", self._current_mode, {"feedback": user_feedback[:50]})
+            
+            if not self._linkedin_workflow:
+                return "No active LinkedIn draft workflow. Use start_linkedin_draft first to create a new post."
+            
+            # Trace this tool call with Arize
+            with trace_tool_call("continue_linkedin_draft", self._current_mode, {
+                "feedback_length": len(user_feedback),
+                "current_stage": self._linkedin_workflow.current_stage
+            }):
+                try:
+                    # Continue the workflow with user feedback
+                    response = await self._linkedin_workflow.continue_with(user_feedback)
+                    
+                    current_stage = self._linkedin_workflow.current_stage
+                    logger.info(f"➡️ LinkedIn workflow continued, stage: {current_stage}")
+                    
+                    # If workflow completed and confirmed, execute the actual post
+                    if self._linkedin_workflow.is_complete and self._linkedin_workflow.is_confirmed:
+                        post_content = self._linkedin_workflow.get_post_content()
+                        image_desc = self._linkedin_workflow.get_image_description()
+                        
+                        logger.info(f"✅ LinkedIn workflow confirmed! Executing post...")
+                        
+                        # Execute the actual LinkedIn post
+                        if self._router:
+                            linkedin_agent = self._router.create_agent('linkedin', self._router.get_agent_system_prompt('linkedin'))
+                            if hasattr(linkedin_agent, '_shared_state') and linkedin_agent._shared_state is None:
+                                linkedin_agent._shared_state = self._shared_state
+                            if hasattr(linkedin_agent, '_post_to_linkedin_impl'):
+                                _, post_result = await linkedin_agent._post_to_linkedin_impl(post_content, image_desc)
+                                response = f"{response}\n\n{post_result}"
+                        
+                        # Clear the workflow
+                        self._linkedin_workflow = None
+                    
+                    elif self._linkedin_workflow.is_complete:
+                        # Workflow ended (cancelled or error)
+                        self._linkedin_workflow = None
+                    
+                    return response
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error continuing LinkedIn workflow: {e}", exc_info=True)
+                    record_error("workflow_continue_error", str(e), {
+                        "workflow": "linkedin",
+                        "feedback": user_feedback[:100]
+                    })
+                    return f"Error in LinkedIn workflow: {str(e)}"
+        
+        @function_tool
+        async def get_linkedin_draft_status(self, context: RunContext) -> str:
+            """
+            Get the current status of an active LinkedIn drafting workflow.
+            
+            Returns:
+                Current workflow status including stage, draft content, and whether an image is requested
+            """
+            log_tool_call("get_linkedin_draft_status", self._current_mode, {})
+            
+            if not self._linkedin_workflow:
+                return "No active LinkedIn draft workflow."
+            
+            status = f"LinkedIn Draft Workflow Status:\n"
+            status += f"  Stage: {self._linkedin_workflow.current_stage}\n"
+            status += f"  Complete: {self._linkedin_workflow.is_complete}\n"
+            status += f"  Confirmed: {self._linkedin_workflow.is_confirmed}\n"
+            
+            draft = self._linkedin_workflow.get_post_content()
+            if draft:
+                status += f"  Draft preview: {draft[:100]}...\n"
+            
+            image_desc = self._linkedin_workflow.get_image_description()
+            if image_desc:
+                status += f"  Image description: {image_desc}\n"
+            
+            return status
         
         @function_tool
         async def post_to_x(
@@ -607,6 +792,7 @@ async def entrypoint(ctx: JobContext):
     unified_agent._web_search_service = web_search_service
     unified_agent._conversation_storage = conversation_storage
     unified_agent._session_id = ctx.job.id  # Use job ID as session ID
+    unified_agent._room_name = ctx.room.name  # Store room name for tracing
     
     # Start agent session
     session = AgentSession(

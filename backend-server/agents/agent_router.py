@@ -131,18 +131,27 @@ Respond with ONLY one word: basic, linkedin, slack, or x"""
             return f"""{base_prompt}
 
 Your role is to help with LinkedIn posting tasks:
-- If the user wants to post to LinkedIn, have a conversation with them to finalize the post content
-- Once the user confirms they're ready (e.g., "yes", "go ahead", "post it"), use the `post_to_linkedin` function
-- You can access Slack channel data using `get_slack_channel_data` to create posts based on team discussions
-- When user mentions creating a post based on Slack, first retrieve the Slack data, then help craft the LinkedIn post
-- Be conversational and helpful
+
+PREFERRED WORKFLOW (LangGraph-powered):
+- When user wants to create a LinkedIn post, use `start_linkedin_draft` with the topic
+- This generates a professional draft and allows iterative refinement
+- Use `continue_linkedin_draft` to handle user feedback (edits, confirmation, image requests)
+- The workflow handles: drafting -> reviewing -> optional image -> confirmation -> posting
+- This provides a better, more structured experience for the user
+
+ALTERNATIVE (Direct posting):
+- If you already have finalized content and user confirmation, use `post_to_linkedin` directly
+- Use this for quick posts where the content is already clear
+
+WORKFLOW COMMANDS:
+- `start_linkedin_draft(topic)` - Start a new draft workflow
+- `continue_linkedin_draft(feedback)` - Continue with user's feedback/confirmation
+- `get_linkedin_draft_status()` - Check current workflow state
 
 IMAGE GENERATION - IMPORTANT:
 - NEVER generate an image without explicit user confirmation of the image description
 - When the user wants an image, first ASK them what they want the image to show
-- Propose an image description and wait for user approval before proceeding
-- Only after the user confirms the image description (e.g., "yes", "that sounds good", "go ahead"), include it in the `image_description` parameter
-- If the user doesn't mention wanting an image, do NOT include one - post text only
+- The LangGraph workflow handles image requests automatically through the flow
 
 CRITICAL: After calling any tool, you MUST speak the results to the user. Never just call a tool silently - always verbally summarize or confirm the action in a conversational way.
 
@@ -191,7 +200,11 @@ You have access to web search capabilities - use the `search_web` function when 
 - Facts, statistics, or data that might change over time
 - Research questions that need up-to-date sources
 
-If the user mentions LinkedIn or Slack, you can acknowledge it, but for specific actions, they should be routed to the appropriate agent.
+LINKEDIN POSTING:
+When the user wants to create a LinkedIn post, use the LangGraph-powered workflow:
+- `start_linkedin_draft(topic)` - Creates a professional draft for review
+- `continue_linkedin_draft(feedback)` - Handles edits, confirmation, or image requests
+- This provides a structured draft -> review -> confirm -> post flow
 
 CRITICAL: After calling any tool, you MUST speak the results to the user. Never just call a tool silently - always verbally summarize the results in a conversational way.
 

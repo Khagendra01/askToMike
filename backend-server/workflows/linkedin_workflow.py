@@ -16,6 +16,10 @@ import asyncio
 from typing import TypedDict, Optional, Literal, Annotated
 from datetime import datetime
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -26,6 +30,27 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from utils.logger import get_logger
+
+# Import Arize tracing helpers (graceful fallback if not available)
+try:
+    from services.arize_tracing import (
+        trace_workflow_node,
+        record_workflow_completion,
+        is_arize_enabled
+    )
+    _has_arize = True
+except ImportError:
+    _has_arize = False
+    def trace_workflow_node(*args, **kwargs):
+        from contextlib import contextmanager
+        @contextmanager
+        def noop():
+            yield None
+        return noop()
+    def record_workflow_completion(*args, **kwargs):
+        pass
+    def is_arize_enabled():
+        return False
 
 logger = get_logger(__name__)
 
@@ -88,9 +113,13 @@ async def draft_post(state: LinkedInWorkflowState) -> LinkedInWorkflowState:
     """
     logger.info(f"📝 Drafting LinkedIn post for: {state['user_request'][:50]}...")
     
-    llm = get_llm()
-    
-    system_prompt = """You are a LinkedIn content specialist. Create engaging, professional LinkedIn posts.
+    # Trace this workflow node
+    with trace_workflow_node("draft_post", "linkedin", stage="drafting", metadata={
+        "user_request_length": len(state['user_request'])
+    }):
+        llm = get_llm()
+        
+        system_prompt = """You are a LinkedIn content specialist. Create engaging, professional LinkedIn posts.
 
 Guidelines:
 - Keep posts concise but impactful (ideally 150-300 words)
@@ -101,32 +130,32 @@ Guidelines:
 
 Generate ONLY the post content, nothing else."""
 
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=f"Create a LinkedIn post about: {state['user_request']}")
-    ]
-    
-    try:
-        response = await llm.ainvoke(messages)
-        draft = response.content.strip()
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=f"Create a LinkedIn post about: {state['user_request']}")
+        ]
         
-        logger.info(f"✅ Draft created ({len(draft)} chars)")
-        
-        return {
-            **state,
-            "draft_content": draft,
-            "stage": "reviewing",
-            "messages": state["messages"] + [
-                AIMessage(content=f"Here's a draft for your LinkedIn post:\n\n{draft}\n\nWould you like me to make any changes, or is this good to post?")
-            ]
-        }
-    except Exception as e:
-        logger.error(f"❌ Error drafting post: {e}")
-        return {
-            **state,
-            "error": f"Failed to draft post: {str(e)}",
-            "stage": "cancelled"
-        }
+        try:
+            response = await llm.ainvoke(messages)
+            draft = response.content.strip()
+            
+            logger.info(f"✅ Draft created ({len(draft)} chars)")
+            
+            return {
+                **state,
+                "draft_content": draft,
+                "stage": "reviewing",
+                "messages": state["messages"] + [
+                    AIMessage(content=f"Here's a draft for your LinkedIn post:\n\n{draft}\n\nWould you like me to make any changes, or is this good to post?")
+                ]
+            }
+        except Exception as e:
+            logger.error(f"❌ Error drafting post: {e}")
+            return {
+                **state,
+                "error": f"Failed to draft post: {str(e)}",
+                "stage": "cancelled"
+            }
 
 
 async def review_draft(state: LinkedInWorkflowState) -> LinkedInWorkflowState:
@@ -143,10 +172,14 @@ async def review_draft(state: LinkedInWorkflowState) -> LinkedInWorkflowState:
     
     last_user_message = user_messages[-1].content.lower()
     
-    llm = get_llm()
-    
-    # Determine user intent
-    intent_prompt = f"""Analyze the user's response to a LinkedIn post draft and determine their intent.
+    # Trace this workflow node
+    with trace_workflow_node("review_draft", "linkedin", stage="reviewing", metadata={
+        "user_feedback_length": len(last_user_message)
+    }):
+        llm = get_llm()
+        
+        # Determine user intent
+        intent_prompt = f"""Analyze the user's response to a LinkedIn post draft and determine their intent.
 
 User's response: "{last_user_message}"
 
@@ -158,42 +191,42 @@ Respond with EXACTLY one of these options:
 
 Respond with only the single word."""
 
-    try:
-        response = await llm.ainvoke([HumanMessage(content=intent_prompt)])
-        intent = response.content.strip().upper()
-        
-        logger.info(f"🎯 User intent detected: {intent}")
-        
-        if intent == "APPROVE":
-            return {
-                **state,
-                "user_confirmed": True,
-                "stage": "confirmed"
-            }
-        elif intent == "ADD_IMAGE":
-            return {
-                **state,
-                "wants_image": True,
-                "stage": "image_review",
-                "messages": state["messages"] + [
-                    AIMessage(content="Great! What would you like the image to show? Please describe the image you'd like me to generate.")
-                ]
-            }
-        elif intent == "CANCEL":
-            return {
-                **state,
-                "stage": "cancelled",
-                "result": "Post cancelled by user."
-            }
-        else:  # EDIT or unknown - revise the draft
-            return await revise_draft(state, last_user_message)
+        try:
+            response = await llm.ainvoke([HumanMessage(content=intent_prompt)])
+            intent = response.content.strip().upper()
             
-    except Exception as e:
-        logger.error(f"❌ Error in review: {e}")
-        return {
-            **state,
-            "error": f"Error processing review: {str(e)}"
-        }
+            logger.info(f"🎯 User intent detected: {intent}")
+            
+            if intent == "APPROVE":
+                return {
+                    **state,
+                    "user_confirmed": True,
+                    "stage": "confirmed"
+                }
+            elif intent == "ADD_IMAGE":
+                return {
+                    **state,
+                    "wants_image": True,
+                    "stage": "image_review",
+                    "messages": state["messages"] + [
+                        AIMessage(content="Great! What would you like the image to show? Please describe the image you'd like me to generate.")
+                    ]
+                }
+            elif intent == "CANCEL":
+                return {
+                    **state,
+                    "stage": "cancelled",
+                    "result": "Post cancelled by user."
+                }
+            else:  # EDIT or unknown - revise the draft
+                return await revise_draft(state, last_user_message)
+                
+        except Exception as e:
+            logger.error(f"❌ Error in review: {e}")
+            return {
+                **state,
+                "error": f"Error processing review: {str(e)}"
+            }
 
 
 async def revise_draft(state: LinkedInWorkflowState, feedback: str) -> LinkedInWorkflowState:
@@ -202,9 +235,14 @@ async def revise_draft(state: LinkedInWorkflowState, feedback: str) -> LinkedInW
     """
     logger.info(f"✏️ Revising draft based on feedback: {feedback[:50]}...")
     
-    llm = get_llm()
-    
-    revision_prompt = f"""Revise this LinkedIn post based on the user's feedback.
+    # Trace this workflow node
+    with trace_workflow_node("revise_draft", "linkedin", stage="revising", metadata={
+        "feedback_length": len(feedback),
+        "original_draft_length": len(state.get('draft_content', ''))
+    }):
+        llm = get_llm()
+        
+        revision_prompt = f"""Revise this LinkedIn post based on the user's feedback.
 
 Current draft:
 {state['draft_content']}
@@ -213,26 +251,26 @@ User's feedback: {feedback}
 
 Generate ONLY the revised post content, nothing else."""
 
-    try:
-        response = await llm.ainvoke([HumanMessage(content=revision_prompt)])
-        revised = response.content.strip()
-        
-        logger.info(f"✅ Draft revised ({len(revised)} chars)")
-        
-        return {
-            **state,
-            "draft_content": revised,
-            "stage": "reviewing",
-            "messages": state["messages"] + [
-                AIMessage(content=f"Here's the revised post:\n\n{revised}\n\nHow does this look? Ready to post, or would you like more changes?")
-            ]
-        }
-    except Exception as e:
-        logger.error(f"❌ Error revising draft: {e}")
-        return {
-            **state,
-            "error": f"Failed to revise draft: {str(e)}"
-        }
+        try:
+            response = await llm.ainvoke([HumanMessage(content=revision_prompt)])
+            revised = response.content.strip()
+            
+            logger.info(f"✅ Draft revised ({len(revised)} chars)")
+            
+            return {
+                **state,
+                "draft_content": revised,
+                "stage": "reviewing",
+                "messages": state["messages"] + [
+                    AIMessage(content=f"Here's the revised post:\n\n{revised}\n\nHow does this look? Ready to post, or would you like more changes?")
+                ]
+            }
+        except Exception as e:
+            logger.error(f"❌ Error revising draft: {e}")
+            return {
+                **state,
+                "error": f"Failed to revise draft: {str(e)}"
+            }
 
 
 async def handle_image_request(state: LinkedInWorkflowState) -> LinkedInWorkflowState:
@@ -248,45 +286,50 @@ async def handle_image_request(state: LinkedInWorkflowState) -> LinkedInWorkflow
     
     image_desc = user_messages[-1].content
     
-    # Check if user is confirming or providing description
-    lower_desc = image_desc.lower()
-    
-    if state.get("image_description"):
-        # User is responding to image confirmation
-        if any(word in lower_desc for word in ["yes", "good", "perfect", "go ahead", "post"]):
-            return {
-                **state,
-                "user_confirmed": True,
-                "stage": "confirmed"
-            }
-        elif any(word in lower_desc for word in ["no", "cancel", "nevermind", "skip"]):
-            return {
-                **state,
-                "image_description": None,
-                "wants_image": False,
-                "stage": "reviewing",
-                "messages": state["messages"] + [
-                    AIMessage(content=f"No problem! Here's your post without an image:\n\n{state['draft_content']}\n\nReady to post?")
-                ]
-            }
+    # Trace this workflow node
+    with trace_workflow_node("handle_image", "linkedin", stage="image_review", metadata={
+        "has_existing_image_desc": state.get("image_description") is not None,
+        "user_input_length": len(image_desc)
+    }):
+        # Check if user is confirming or providing description
+        lower_desc = image_desc.lower()
+        
+        if state.get("image_description"):
+            # User is responding to image confirmation
+            if any(word in lower_desc for word in ["yes", "good", "perfect", "go ahead", "post"]):
+                return {
+                    **state,
+                    "user_confirmed": True,
+                    "stage": "confirmed"
+                }
+            elif any(word in lower_desc for word in ["no", "cancel", "nevermind", "skip"]):
+                return {
+                    **state,
+                    "image_description": None,
+                    "wants_image": False,
+                    "stage": "reviewing",
+                    "messages": state["messages"] + [
+                        AIMessage(content=f"No problem! Here's your post without an image:\n\n{state['draft_content']}\n\nReady to post?")
+                    ]
+                }
+            else:
+                # User wants to change the image description
+                return {
+                    **state,
+                    "image_description": image_desc,
+                    "messages": state["messages"] + [
+                        AIMessage(content=f"I'll generate an image showing: \"{image_desc}\"\n\nDoes this sound good? Say 'yes' to confirm or describe something different.")
+                    ]
+                }
         else:
-            # User wants to change the image description
+            # First time providing image description
             return {
                 **state,
                 "image_description": image_desc,
                 "messages": state["messages"] + [
-                    AIMessage(content=f"I'll generate an image showing: \"{image_desc}\"\n\nDoes this sound good? Say 'yes' to confirm or describe something different.")
+                    AIMessage(content=f"I'll generate an image showing: \"{image_desc}\"\n\nYour post will be:\n\n{state['draft_content']}\n\nReady to post with this image? Say 'yes' to confirm.")
                 ]
             }
-    else:
-        # First time providing image description
-        return {
-            **state,
-            "image_description": image_desc,
-            "messages": state["messages"] + [
-                AIMessage(content=f"I'll generate an image showing: \"{image_desc}\"\n\nYour post will be:\n\n{state['draft_content']}\n\nReady to post with this image? Say 'yes' to confirm.")
-            ]
-        }
 
 
 async def execute_post(state: LinkedInWorkflowState) -> LinkedInWorkflowState:
@@ -297,20 +340,38 @@ async def execute_post(state: LinkedInWorkflowState) -> LinkedInWorkflowState:
     """
     logger.info(f"🚀 Post confirmed! Ready for execution.")
     
-    result_msg = f"✅ Your LinkedIn post is ready to be published!"
-    if state.get("image_description"):
-        result_msg += f"\n\n📝 Post: {state['draft_content'][:100]}...\n🖼️ Image: {state['image_description']}"
-    else:
-        result_msg += f"\n\n📝 Post: {state['draft_content'][:100]}..."
-    
-    return {
-        **state,
-        "stage": "posted",
-        "result": result_msg,
-        "messages": state["messages"] + [
-            AIMessage(content=result_msg)
-        ]
-    }
+    # Trace this workflow node
+    with trace_workflow_node("execute_post", "linkedin", stage="posting", metadata={
+        "post_length": len(state.get('draft_content', '')),
+        "has_image": state.get('image_description') is not None
+    }):
+        result_msg = f"✅ Your LinkedIn post is ready to be published!"
+        if state.get("image_description"):
+            result_msg += f"\n\n📝 Post: {state['draft_content'][:100]}...\n🖼️ Image: {state['image_description']}"
+        else:
+            result_msg += f"\n\n📝 Post: {state['draft_content'][:100]}..."
+        
+        # Record workflow completion
+        record_workflow_completion(
+            workflow_name="linkedin",
+            session_id="workflow",  # Will be overridden by caller if available
+            success=True,
+            final_stage="posted",
+            output_preview=state.get('draft_content', '')[:200],
+            metadata={
+                "has_image": state.get('image_description') is not None,
+                "post_length": len(state.get('draft_content', ''))
+            }
+        )
+        
+        return {
+            **state,
+            "stage": "posted",
+            "result": result_msg,
+            "messages": state["messages"] + [
+                AIMessage(content=result_msg)
+            ]
+        }
 
 
 # =============================================================================
