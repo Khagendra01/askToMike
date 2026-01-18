@@ -187,6 +187,71 @@ class SharedStateService:
                 states[key_name] = json.loads(value_json)
         return states
     
+    # ============================================================
+    # LinkedIn Post Cooldown & Deduplication
+    # ============================================================
+    
+    async def check_linkedin_cooldown(self, cooldown_seconds: int = 30) -> tuple[bool, float]:
+        """
+        Check if LinkedIn posting is in cooldown period.
+        
+        Args:
+            cooldown_seconds: Cooldown duration in seconds (default: 30)
+        
+        Returns:
+            Tuple of (is_allowed, remaining_seconds)
+            - is_allowed: True if posting is allowed, False if in cooldown
+            - remaining_seconds: Seconds remaining in cooldown (0 if allowed)
+        """
+        client = await self.connect()
+        cooldown_key = "linkedin_post_cooldown"
+        
+        last_post_time = await client.get(cooldown_key)
+        if last_post_time:
+            import time
+            elapsed = time.time() - float(last_post_time)
+            if elapsed < cooldown_seconds:
+                remaining = cooldown_seconds - elapsed
+                return False, remaining
+        
+        return True, 0.0
+    
+    async def set_linkedin_cooldown(self) -> None:
+        """Mark that a LinkedIn post was just made, starting the cooldown."""
+        import time
+        client = await self.connect()
+        cooldown_key = "linkedin_post_cooldown"
+        await client.set(cooldown_key, str(time.time()))
+        # Auto-expire after 60 seconds (cleanup)
+        await client.expire(cooldown_key, 60)
+    
+    async def check_linkedin_duplicate(self, post_content: str, window_seconds: int = 60) -> bool:
+        """
+        Check if this post content was recently submitted (deduplication).
+        
+        Args:
+            post_content: The post text to check
+            window_seconds: Time window to check for duplicates (default: 60s)
+        
+        Returns:
+            True if this is a duplicate (should be rejected), False if it's new
+        """
+        import hashlib
+        client = await self.connect()
+        
+        # Create a hash of the post content (normalized)
+        content_hash = hashlib.md5(post_content.strip().lower().encode()).hexdigest()
+        dedup_key = f"linkedin_post_dedup:{content_hash}"
+        
+        # Check if this hash exists
+        exists = await client.exists(dedup_key)
+        if exists:
+            return True  # Duplicate
+        
+        # Mark this content as recently posted
+        await client.setex(dedup_key, window_seconds, "1")
+        return False  # Not a duplicate
+    
     async def close(self) -> None:
         """Close Redis connection"""
         if self._client:

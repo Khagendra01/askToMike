@@ -250,7 +250,10 @@ async def entrypoint(ctx: JobContext):
             post_content: str,
             image_description: Optional[str] = None
         ):
-            """Post content to LinkedIn (delegates to LinkedIn agent logic)"""
+            """
+            Post content to LinkedIn (delegates to LinkedIn agent logic).
+            Note: There is a 30-second cooldown between posts to prevent duplicates.
+            """
             log_tool_call("post_to_linkedin", self._current_mode, {
                 "post_length": len(post_content),
                 "has_image": image_description is not None
@@ -258,6 +261,9 @@ async def entrypoint(ctx: JobContext):
             if not self._router:
                 return None, "Router not available"
             linkedin_agent = self._router.create_agent('linkedin', self._router.get_agent_system_prompt('linkedin'))
+            # Ensure shared_state is passed for cooldown/deduplication checks
+            if hasattr(linkedin_agent, '_shared_state') and linkedin_agent._shared_state is None:
+                linkedin_agent._shared_state = self._shared_state
             if hasattr(linkedin_agent, '_post_to_linkedin_impl'):
                 return await linkedin_agent._post_to_linkedin_impl(post_content, image_description)
             return None, "LinkedIn posting not available"
@@ -701,44 +707,92 @@ async def entrypoint(ctx: JobContext):
     
     # Hook into session to capture messages from chat context
     # This captures ALL messages (speech + text) that go through the session
+    _saved_message_ids = set()  # Track saved messages by their id()
+    
     async def monitor_session_messages():
         """Monitor session for all messages and save them"""
         try:
-            await asyncio.sleep(2)  # Wait for session to start
+            await asyncio.sleep(3)  # Wait for session to fully start
+            logger.info("📡 Starting message monitor...")
             
-            # Access the agent's chat context after session starts
+            # Log what attributes are available for debugging
+            logger.info(f"   Session attributes: {[a for a in dir(session) if not a.startswith('_')][:20]}")
+            
             while True:
                 try:
                     await asyncio.sleep(1)  # Check every second
                     
-                    # Try to access messages from the agent's internal chat context
-                    if hasattr(unified_agent, '_chat_ctx') and unified_agent._chat_ctx:
-                        if hasattr(unified_agent._chat_ctx, 'messages'):
-                            messages = unified_agent._chat_ctx.messages
-                            # We'll track which ones we've saved
-                            if not hasattr(monitor_session_messages, '_saved_count'):
-                                monitor_session_messages._saved_count = 0
+                    # Try multiple ways to access the chat context
+                    chat_ctx = None
+                    items = None
+                    
+                    # Method 1: session.chat_ctx
+                    if hasattr(session, 'chat_ctx') and session.chat_ctx:
+                        chat_ctx = session.chat_ctx
+                    # Method 2: session._chat_ctx  
+                    elif hasattr(session, '_chat_ctx') and session._chat_ctx:
+                        chat_ctx = session._chat_ctx
+                    # Method 3: agent's chat context
+                    elif hasattr(unified_agent, '_chat_ctx') and unified_agent._chat_ctx:
+                        chat_ctx = unified_agent._chat_ctx
+                    
+                    if chat_ctx:
+                        # Try to get items/messages from chat context
+                        if hasattr(chat_ctx, 'items'):
+                            items = chat_ctx.items
+                        elif hasattr(chat_ctx, 'messages'):
+                            items = chat_ctx.messages
+                    
+                    if items:
+                        for item in items:
+                            item_id = id(item)
+                            if item_id in _saved_message_ids:
+                                continue
                             
-                            new_messages = messages[monitor_session_messages._saved_count:]
-                            for msg in new_messages:
+                            # Extract role
+                            role = getattr(item, 'role', None)
+                            if role:
+                                # Handle enum
+                                if hasattr(role, 'value'):
+                                    role = role.value
+                                role = str(role).lower()
+                            
+                            # Extract content
+                            content = None
+                            if hasattr(item, 'text_content') and item.text_content:
+                                content = item.text_content
+                            elif hasattr(item, 'content'):
+                                c = item.content
+                                if isinstance(c, str):
+                                    content = c
+                                elif isinstance(c, list):
+                                    # Extract text from content parts
+                                    parts = []
+                                    for part in c:
+                                        if hasattr(part, 'text'):
+                                            parts.append(str(part.text))
+                                        elif isinstance(part, str):
+                                            parts.append(part)
+                                    content = ' '.join(parts)
+                            
+                            if role in ['user', 'assistant'] and content and str(content).strip():
+                                content = str(content).strip()
+                                _saved_message_ids.add(item_id)
+                                
+                                agent_name = getattr(unified_agent, '_current_mode', 'basic')
                                 try:
-                                    role = getattr(msg, 'role', None)
-                                    content = getattr(msg, 'content', None) or getattr(msg, 'text_content', None) or str(msg)
-                                    
-                                    if role in ['user', 'assistant'] and content and content.strip():
-                                        agent_name = getattr(unified_agent, '_current_mode', 'basic')
-                                        await shared_state.add_conversation(
-                                            agent_name,
-                                            role,
-                                            content
-                                        )
-                                        logger.info(f"💾 Captured {role} message: {content[:60]}...")
-                                        monitor_session_messages._saved_count += 1
+                                    await shared_state.add_conversation(agent_name, role, content)
+                                    logger.info(f"💾 Captured {role}: {content[:60]}...")
                                 except Exception as e:
-                                    logger.debug(f"Error saving message from monitor: {e}")
+                                    logger.error(f"❌ Failed to save message: {e}")
+                                    
                 except Exception as e:
-                    logger.debug(f"Error in monitor_session_messages: {e}")
+                    # Only log if it's not a common "no messages yet" error
+                    if "NoneType" not in str(e):
+                        logger.debug(f"Monitor check error: {e}")
                     await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            logger.info("📡 Message monitor cancelled")
         except Exception as e:
             logger.error(f"Error in monitor_session_messages task: {e}")
     

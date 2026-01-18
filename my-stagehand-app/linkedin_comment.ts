@@ -2,12 +2,47 @@ import "dotenv/config";
 import { SessionManager } from "./session-manager.js";
 
 // ============================
+// CLI ARGS
+// ============================
+
+function parseArgs(): { keyword?: string } {
+  const args = process.argv.slice(2);
+  let keyword: string | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--keyword" || args[i] === "-k") {
+      keyword = args[i + 1];
+      i++;
+    }
+  }
+
+  return { keyword };
+}
+
+const CLI_ARGS = parseArgs();
+
+// ============================
 // CONFIG
 // ============================
 
 const MAX_POSTS = parseInt(process.env.MAX_POSTS ?? "50");
 const COMMENT_RATE = parseFloat(process.env.COMMENT_RATE ?? "0.4"); // target engagement density
 const RUN_URN_BLACKLIST = new Set<string>();
+
+// ============================
+// URL HELPERS
+// ============================
+
+/**
+ * Build LinkedIn URL based on whether keyword search is requested
+ */
+function getLinkedInUrl(keyword?: string): string {
+  if (keyword) {
+    const encodedKeyword = encodeURIComponent(keyword);
+    return `https://www.linkedin.com/search/results/content/?keywords=${encodedKeyword}&origin=FACETED_SEARCH&sortBy=%5B%22relevance%22%5D`;
+  }
+  return "https://www.linkedin.com/feed/";
+}
 
 // ============================
 // INVARIANT ASSERTIONS
@@ -283,35 +318,64 @@ function heuristicDecision(text: string): boolean {
 }
 
 // ============================
-// COMMENT AGENT (Stagehand - stateless)
+// COMMENT AGENT (Stagehand act/extract - uses Gemini vision)
 // ============================
 
 /**
- * Comment agent: executes ONE action max
- * One click to open, one fill, one submit
- * If anything unexpected → throw
+ * Comment agent: uses Stagehand's act() method with regular Gemini model
+ * This uses vision + DOM analysis to find and interact with elements
  */
 async function agentComment(params: {
   urn: string;
   postIndex: number;
   text: string;
-  agent: any;
+  stagehand: any;
   page: any;
 }): Promise<void> {
-  // Verify URN matches before commenting
-  const currentPostData = await params.page.evaluate((index: number) => {
+  // Verify URN matches before commenting and get author info
+  const postInfo = await params.page.evaluate((index: number) => {
     const posts = Array.from(document.querySelectorAll('div[data-urn*="urn:li:activity:"]'));
     if (index < 0 || index >= posts.length) return null;
     const post = posts[index];
     const urnAttr = post.getAttribute('data-urn');
     const urn = urnAttr?.match(/urn:li:activity:\d+/)?.[0];
-    return urn;
+    
+    // Get author name for more specific targeting
+    const authorEl = post.querySelector('[data-testid="actor-name"]') ||
+                     post.querySelector('.feed-shared-actor__name') ||
+                     post.querySelector('.update-components-actor__name');
+    const author = (authorEl?.textContent || '').trim().split('\n')[0].trim();
+    
+    // Get first few words of post content
+    const textEls = post.querySelectorAll('span[dir="ltr"]');
+    let preview = '';
+    for (const el of textEls) {
+      const t = (el.textContent || '').trim();
+      if (t.length > 20) {
+        preview = t.substring(0, 50);
+        break;
+      }
+    }
+    
+    return { urn, author, preview };
   }, params.postIndex);
 
   assertInvariant(
-    currentPostData === params.urn,
-    `URN mismatch before commenting: expected ${params.urn}, got ${currentPostData}`
+    postInfo?.urn === params.urn,
+    `URN mismatch before commenting: expected ${params.urn}, got ${postInfo?.urn}`
   );
+
+  // Scroll the target post to the center of the viewport for better targeting
+  await params.page.evaluate((index: number) => {
+    const posts = Array.from(document.querySelectorAll('div[data-urn*="urn:li:activity:"]'));
+    if (index >= 0 && index < posts.length) {
+      const post = posts[index];
+      post.scrollIntoView({ behavior: 'instant', block: 'center' });
+    }
+  }, params.postIndex);
+  
+  // Wait for scroll to settle
+  await new Promise((resolve) => setTimeout(resolve, 500));
 
   // Generate comment text with screenshot
   const commentText = await generateCommentText({
@@ -320,18 +384,37 @@ async function agentComment(params: {
     page: params.page,
   });
 
-  // Execute: one click to open, one fill, one submit
-  const result = await params.agent.execute({
-    instruction: `Find and click the "Comment" button on the post at the top of the viewport. Once the comment box opens, type exactly: "${commentText}". Then click "Post" or "Submit" to publish. Do this in one sequence - no retries.`,
-    maxSteps: 10,
-  });
+  // Build a specific instruction using author name if available
+  const authorHint = postInfo?.author ? ` by ${postInfo.author}` : '';
+  const previewHint = postInfo?.preview ? ` The post starts with "${postInfo.preview.substring(0, 30)}..."` : '';
 
-  if (!result.success) {
-    throw new Error("Comment agent failed - no retries");
-  }
+  // Use Stagehand's act() method - it uses vision to find and click elements
+  // Step 1: Click the Comment button on the centered post
+  console.log("      📝 Clicking Comment button...");
+  await params.stagehand.act(
+    `Click the Comment button on the LinkedIn post${authorHint} that is centered on the screen.${previewHint} The Comment button is in the action bar with Like, Comment, Repost, Send buttons. Do NOT click 'Start a post' at the top of the page.`
+  );
 
-  // Wait briefly for comment to post
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  // Wait for comment box to appear
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+
+  // Step 2: Type the comment in the comment input box
+  console.log("      ✏️  Typing comment...");
+  await params.stagehand.act(
+    `Type the following text into the comment input box that just appeared: "${commentText}"`
+  );
+
+  // Wait for text to be entered
+  await new Promise((resolve) => setTimeout(resolve, 800));
+
+  // Step 3: Click the Post button to submit the comment
+  console.log("      🚀 Submitting comment...");
+  await params.stagehand.act(
+    "Click the Post button to submit the comment. It should be a small button near the comment input box."
+  );
+
+  // Wait for comment to post
+  await new Promise((resolve) => setTimeout(resolve, 2000));
 }
 
 /**
@@ -501,7 +584,13 @@ async function main() {
   });
 
   const mode = sessionManager.getMode();
-  console.log(`🚀 Starting LinkedIn comment automation in ${mode} mode...`);
+  const keyword = CLI_ARGS.keyword;
+  
+  if (keyword) {
+    console.log(`🚀 Starting LinkedIn comment automation in ${mode} mode with keyword search: "${keyword}"...`);
+  } else {
+    console.log(`🚀 Starting LinkedIn comment automation in ${mode} mode...`);
+  }
 
   const session = await sessionManager.initializeStagehand({
     model: "google/gemini-3-flash-preview",
@@ -509,11 +598,17 @@ async function main() {
 
   const page = session.page;
 
-  // Navigate to LinkedIn feed
-  await page.goto("https://www.linkedin.com/feed/", {
+  // Navigate to LinkedIn feed or search results
+  const targetUrl = getLinkedInUrl(keyword);
+  await page.goto(targetUrl, {
     waitUntil: "domcontentloaded",
   });
-  console.log("➡️ Navigated to LinkedIn feed");
+  
+  if (keyword) {
+    console.log(`➡️ Navigated to LinkedIn search results for "${keyword}"`);
+  } else {
+    console.log("➡️ Navigated to LinkedIn feed");
+  }
 
   // Wait for feed to load
   await new Promise((resolve) => setTimeout(resolve, 3000));
@@ -524,21 +619,9 @@ async function main() {
     throw new Error("Missing Google API key!");
   }
 
-  // === Create comment agent (UI interaction only) ===
-  const commentAgent = session.stagehand.agent({
-    mode: "cua",
-    model: {
-      modelName: "google/gemini-2.5-computer-use-preview-10-2025",
-      apiKey: googleApiKey,
-    },
-    systemPrompt: `You are a LinkedIn comment assistant. You execute ONE action sequence:
-1. Click Comment button on the post at the top of viewport
-2. Type the provided comment text
-3. Click Post/Submit button
-No retries. If anything unexpected happens, stop.`,
-  });
-
-  console.log("🤖 Agents initialized");
+  // Note: Using direct Playwright actions instead of CUA agent for reliability
+  // The CUA agent has compatibility issues with LinkedIn (Stagehand "no candidates" error)
+  console.log("🤖 Using direct Playwright actions for commenting");
 
   // === Track engagement rate ===
   let commentsPosted = 0;
@@ -654,7 +737,7 @@ No retries. If anything unexpected happens, stop.`,
         urn: postInfo.urn,
         postIndex: currentPostInfo.index,
         text: expandedText,
-        agent: commentAgent,
+        stagehand: session.stagehand,
         page: page,
       });
 

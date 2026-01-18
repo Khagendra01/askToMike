@@ -52,6 +52,22 @@ class LinkedInAgent(Agent):
         if image_description:
             logger.info(f"🖼️  Image description: {image_description[:100]}...")
         
+        # ============================================================
+        # Cooldown & Deduplication Checks
+        # ============================================================
+        if self._shared_state:
+            # Check cooldown (30 seconds between posts)
+            is_allowed, remaining = await self._shared_state.check_linkedin_cooldown(cooldown_seconds=30)
+            if not is_allowed:
+                logger.warning(f"⏳ LinkedIn post blocked - cooldown active ({remaining:.1f}s remaining)")
+                return None, f"⏳ Please wait {remaining:.0f} seconds before posting again. This prevents duplicate posts."
+            
+            # Check for duplicate content
+            is_duplicate = await self._shared_state.check_linkedin_duplicate(post_content, window_seconds=60)
+            if is_duplicate:
+                logger.warning(f"🔄 LinkedIn post blocked - duplicate content detected")
+                return None, "🔄 This post appears to be a duplicate of a recent submission. Your previous post is being processed."
+        
         # Generate image if description provided
         image_url = None
         if image_description and self._image_service:
@@ -76,6 +92,12 @@ class LinkedInAgent(Agent):
                     "timestamp": asyncio.get_event_loop().time()
                 }
                 await self._redis_service.push_task(task)
+                
+                # Set cooldown AFTER successful queue
+                if self._shared_state:
+                    await self._shared_state.set_linkedin_cooldown()
+                    logger.info(f"⏱️ LinkedIn cooldown started (30s)")
+                
                 logger.info(f"✅ Queued LinkedIn post" + (" with image" if image_url else ""))
                 return None, f"✅ Done! I've queued your LinkedIn post{' with image' if image_url else ''}. It will be posted shortly."
             except Exception as e:

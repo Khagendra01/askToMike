@@ -143,8 +143,9 @@ async function downloadImageToTempFile(imageUrl: string): Promise<string> {
   // Handle file:// URLs (local files from Python backend)
   if (imageUrl.startsWith("file://")) {
     // Extract the file path from file:// URL
-    // file:///C:/path/to/file or file://C:/path/to/file
-    let filePath = imageUrl.replace(/^file:\/\/+/, "");
+    // file:///path/to/file (Unix) or file:///C:/path/to/file (Windows)
+    // Use URL API for proper parsing
+    let filePath = new URL(imageUrl).pathname;
     
     // On Windows, remove leading slash if present: file:///C:/ -> C:/
     if (process.platform === "win32" && filePath.match(/^\/[A-Z]:/)) {
