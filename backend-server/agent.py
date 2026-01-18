@@ -58,12 +58,19 @@ setup_logging(level=log_level_map.get(log_level, logging.INFO), use_colors=True)
 
 logger = get_logger(__name__)
 
-# Initialize Arize AX tracing (if configured)
-_arize_initialized = init_arize_tracing(project_name="delegate-voice-agent")
+# Note: Arize tracing is initialized lazily inside entrypoint() to prevent
+# duplicate initialization in multi-process worker scenarios
+_arize_initialized = False
 
 
 async def entrypoint(ctx: JobContext):
     """Entrypoint function for LiveKit agent - called when a job is assigned"""
+    global _arize_initialized
+    
+    # Initialize Arize tracing once per process (idempotent)
+    if not _arize_initialized:
+        _arize_initialized = init_arize_tracing(project_name="delegate-voice-agent")
+    
     logger.info(f"👉 Entrypoint called for job: {ctx.job.id}")
     try:
         await ctx.connect()

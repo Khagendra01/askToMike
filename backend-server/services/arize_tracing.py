@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _tracer = None
 _tracer_provider = None
 _arize_enabled = False
+_initialization_attempted = False  # Prevent duplicate initialization
 
 
 def init_arize_tracing(project_name: str = "delegate-voice-agent") -> bool:
@@ -28,13 +29,19 @@ def init_arize_tracing(project_name: str = "delegate-voice-agent") -> bool:
     Initialize Arize AX tracing using HTTP/OTLP (more reliable than gRPC).
     
     Returns True if successfully initialized, False otherwise.
+    This function is idempotent - calling it multiple times is safe.
     
     Environment variables:
     - ARIZE_SPACE_ID: Your Arize space ID (required)
     - ARIZE_API_KEY: Your Arize API key (required)  
     - ARIZE_ENABLED: Set to "false" to disable tracing (optional)
     """
-    global _tracer, _tracer_provider, _arize_enabled
+    global _tracer, _tracer_provider, _arize_enabled, _initialization_attempted
+    
+    # Prevent duplicate initialization (important for multi-process workers)
+    if _initialization_attempted:
+        return _arize_enabled
+    _initialization_attempted = True
     
     # Check if explicitly disabled
     if os.getenv("ARIZE_ENABLED", "true").lower() == "false":

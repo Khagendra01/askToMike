@@ -82,6 +82,9 @@ def setup_logging(level: int = logging.INFO, use_colors: bool = True) -> None:
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
     
+    # Mark as initialized
+    _logging_initialized = True
+    
     # Suppress noisy library logs
     logging.getLogger("livekit.agents").setLevel(logging.INFO)
     logging.getLogger("livekit").setLevel(logging.INFO)

@@ -51,13 +51,17 @@ class Application:
         print(f"🔑 Using API Key: {self.config.livekit_api_key[:10]}...")
         
         # Create AgentServer
+        # NOTE: num_idle_processes=0 prevents duplicate process execution
+        # which was causing double logging and slow response times.
+        # Set to 1+ only if you need faster cold-start times and have fixed
+        # any module-level initialization that shouldn't run multiple times.
         self.server = AgentServer.from_server_options(
             WorkerOptions(
                 entrypoint_fnc=entrypoint,
                 ws_url=self.config.livekit_url,
                 api_key=self.config.livekit_api_key,
                 api_secret=self.config.livekit_api_secret,
-                num_idle_processes=1,  # Prewarm one process for better log visibility
+                num_idle_processes=0,  # Disable prewarming to prevent duplicate execution
             )
         )
         
