@@ -240,6 +240,25 @@ async def entrypoint(ctx: JobContext):
             return None, "LinkedIn posting not available"
         
         @function_tool
+        async def post_to_x(
+            self,
+            context: RunContext,
+            post_content: str,
+            image_description: Optional[str] = None
+        ):
+            """Post content to X/Twitter (delegates to X agent logic)"""
+            log_tool_call("post_to_x", self._current_mode, {
+                "post_length": len(post_content),
+                "has_image": image_description is not None
+            })
+            if not self._router:
+                return None, "Router not available"
+            x_agent = self._router.create_agent('x', self._router.get_agent_system_prompt('x'))
+            if hasattr(x_agent, '_post_to_x_impl'):
+                return await x_agent._post_to_x_impl(post_content, image_description)
+            return None, "X/Twitter posting not available"
+        
+        @function_tool
         async def list_slack_channels(self, context: RunContext) -> str:
             """List Slack channels (delegates to Slack agent)"""
             if not self._router:
@@ -321,6 +340,115 @@ async def entrypoint(ctx: JobContext):
             except Exception as e:
                 logger.error(f"❌ Web search error: {e}", exc_info=True)
                 return f"Error performing web search: {str(e)}"
+        
+        @function_tool
+        async def list_calendar_events(
+            self,
+            context: RunContext,
+            max_results: int = 10
+        ) -> str:
+            """
+            List upcoming calendar events. Use when the user asks about their schedule, meetings, or upcoming events.
+            
+            Args:
+                max_results: Maximum number of events to return (default: 10)
+            
+            Returns:
+                A formatted string with upcoming calendar events
+            """
+            log_tool_call("list_calendar_events", self._current_mode, {"max_results": max_results})
+            
+            try:
+                from services.calendar_service import CalendarService
+                from datetime import datetime
+                
+                cal = CalendarService()
+                events = await cal.list_events(max_results)
+                
+                if not events:
+                    return "No upcoming events found in your calendar."
+                
+                result = "Your upcoming calendar events:\n\n"
+                for i, event in enumerate(events, 1):
+                    summary = event.get('summary', 'No title')
+                    start = event['start'].get('dateTime', event['start'].get('date'))
+                    
+                    # Format the date/time nicely
+                    try:
+                        dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
+                        start_str = dt.strftime('%Y-%m-%d %I:%M %p')
+                    except:
+                        start_str = start
+                    
+                    result += f"{i}. {summary}\n"
+                    result += f"   When: {start_str}\n"
+                    
+                    if event.get('description'):
+                        desc = event['description'][:100]  # Truncate long descriptions
+                        result += f"   {desc}\n"
+                    result += "\n"
+                
+                return result
+            except FileNotFoundError as e:
+                return "Calendar service is not configured. Please check credentials file."
+            except Exception as e:
+                logger.error(f"❌ Calendar error: {e}", exc_info=True)
+                return f"Error accessing calendar: {str(e)}"
+        
+        @function_tool
+        async def create_calendar_event(
+            self,
+            context: RunContext,
+            title: str,
+            start_time: str,
+            duration_minutes: int = 60,
+            description: str = ""
+        ) -> str:
+            """
+            Create a new calendar event. Use when the user wants to schedule a meeting, appointment, or event.
+            
+            Args:
+                title: Event title/summary
+                start_time: Start time in ISO format (e.g., "2026-01-20T14:00:00" or "2026-01-20T14:00:00-08:00")
+                duration_minutes: Duration in minutes (default: 60)
+                description: Optional event description
+            
+            Returns:
+                Confirmation message with event details
+            """
+            log_tool_call("create_calendar_event", self._current_mode, {
+                "title": title,
+                "start_time": start_time,
+                "duration_minutes": duration_minutes
+            })
+            
+            try:
+                from services.calendar_service import CalendarService
+                from datetime import datetime, timedelta
+                
+                cal = CalendarService()
+                
+                # Parse the start time
+                try:
+                    # Handle timezone info
+                    if 'Z' in start_time:
+                        start = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                    else:
+                        start = datetime.fromisoformat(start_time)
+                except ValueError:
+                    return f"Invalid date format: {start_time}. Please use ISO format like '2026-01-20T14:00:00'"
+                
+                end = start + timedelta(minutes=duration_minutes)
+                
+                event = await cal.create_event(title, start, end, description)
+                event_link = event.get('htmlLink', '')
+                
+                return f"✅ Created calendar event: '{title}' on {start.strftime('%Y-%m-%d at %I:%M %p')}. {f'Link: {event_link}' if event_link else ''}"
+            except FileNotFoundError as e:
+                return "Calendar service is not configured. Please check credentials file."
+            except Exception as e:
+                logger.error(f"❌ Calendar error: {e}", exc_info=True)
+                return f"Error creating calendar event: {str(e)}"
     
     # Create unified agent with basic prompt
     default_prompt = router.get_agent_system_prompt('basic')
@@ -369,4 +497,4 @@ async def entrypoint(ctx: JobContext):
     asyncio.create_task(greet_user())
     
     logger.info("✅ Multi-agent session started")
-    logger.info("   Available agents: basic, linkedin, slack")
+    logger.info("   Available agents: basic, linkedin, slack, x")

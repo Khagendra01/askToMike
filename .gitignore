@@ -8,4 +8,6 @@ backend-server/venv
 my-stagehand-app/linkedin-context.json
 my-stagehand-app/.sessions/
 
+backend-server/calendar_credentials.json
+
 venv/

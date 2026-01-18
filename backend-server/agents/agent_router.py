@@ -14,6 +14,7 @@ from typing import Optional, Dict, Any
 from agents.basic_agent import BasicAgent
 from agents.linkedin_agent import LinkedInAgent
 from agents.slack_agent import SlackAgent
+from agents.x_agent import XAgent
 from services.shared_state import SharedStateService
 from services.redis_service import RedisService
 from services.image_service import ImageGenerationService
@@ -64,10 +65,11 @@ Available agents:
 - basic: General conversation, questions, basic tasks
 - linkedin: Posting to LinkedIn, LinkedIn-related tasks
 - slack: Slack messages, channels, team communication
+- x: Posting to X/Twitter, tweeting, X-related tasks
 
 User message: "{user_message}"
 
-Respond with ONLY one word: basic, linkedin, or slack"""
+Respond with ONLY one word: basic, linkedin, slack, or x"""
 
         try:
             response = await router_llm.chat([
@@ -77,7 +79,7 @@ Respond with ONLY one word: basic, linkedin, or slack"""
             agent_choice = response.choices[0].message.content.strip().lower()
             
             # Validate choice
-            if agent_choice in ['basic', 'linkedin', 'slack']:
+            if agent_choice in ['basic', 'linkedin', 'slack', 'x']:
                 router_logger.info(f"🎯 Router selected: {agent_choice} for message: '{user_message[:50]}...'")
                 return agent_choice
             else:
@@ -109,6 +111,12 @@ Respond with ONLY one word: basic, linkedin, or slack"""
             )
         elif agent_type == 'slack':
             return SlackAgent(**common_kwargs)
+        elif agent_type == 'x':
+            return XAgent(
+                **common_kwargs,
+                redis_service=self.redis_service,
+                image_service=self.image_service
+            )
         else:  # basic
             return BasicAgent(
                 **common_kwargs,
@@ -143,6 +151,20 @@ Your role is to help with Slack communication:
 - Be helpful and concise
 
 CRITICAL: After calling any tool (like list_slack_channels, read_slack_channel, etc.), you MUST speak the results to the user. Never just call a tool silently - always verbally summarize or read out the results in a conversational way. For example, after listing channels, say something like "Here are your Slack channels: general, random, engineering..." etc.
+
+Important: Don't use any unpronounceable characters in your speech."""
+        
+        elif agent_type == 'x':
+            return f"""{base_prompt}
+
+Your role is to help with X/Twitter posting tasks:
+- If the user wants to post to X/Twitter, have a conversation with them to finalize the post content
+- Remember X/Twitter posts have a 280 character limit for standard posts
+- Once the user confirms they're ready (e.g., "yes", "go ahead", "post it", "tweet it"), use the `post_to_x` function
+- If the user wants an image or asks to "generate an image" or "generate image description", these mean the same thing - provide the image description in the `image_description` parameter and the image will be automatically generated from that description
+- Be conversational and helpful
+
+CRITICAL: After calling any tool, you MUST speak the results to the user. Never just call a tool silently - always verbally summarize or confirm the action in a conversational way.
 
 Important: Don't use any unpronounceable characters in your speech."""
         
