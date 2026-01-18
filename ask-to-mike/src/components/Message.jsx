@@ -1,10 +1,10 @@
-const MIKE_AVATAR = "https://lh3.googleusercontent.com/aida-public/AB6AXuCxQqaGItOZji-_GVFAVOolS45cDQxKKSssHrCqioVn_2Qm-xDjmvNbqA9y7ejL7va2QHALxWHdjHcFAKDiDw82DfBVls1Sc9W6kHryrr4t9IaqWSg_-5XLyQdtfweMBsCpVa0VnBviI0vbKNT0VnRJBGuRvT5VukTUr0m6qPsqUWmyWD6S3Du9ySKvhVD-ZK5-yVryLM6f48OT4x-DmX_W7aEObmxVcuOLKWab5PSiJLeu-p6l_U8vjtARZxuIsgzkoE4Ndhtzpt4p"
+const BOB_AVATAR = "https://lh3.googleusercontent.com/aida-public/AB6AXuCxQqaGItOZji-_GVFAVOolS45cDQxKKSssHrCqioVn_2Qm-xDjmvNbqA9y7ejL7va2QHALxWHdjHcFAKDiDw82DfBVls1Sc9W6kHryrr4t9IaqWSg_-5XLyQdtfweMBsCpVa0VnBviI0vbKNT0VnRJBGuRvT5VukTUr0m6qPsqUWmyWD6S3Du9ySKvhVD-ZK5-yVryLM6f48OT4x-DmX_W7aEObmxVcuOLKWab5PSiJLeu-p6l_U8vjtARZxuIsgzkoE4Ndhtzpt4p"
 const USER_AVATAR = "https://lh3.googleusercontent.com/aida-public/AB6AXuDzU5cVLxp-CdWiTH6hq3Dji55D1wB-zrriZdNm0SkG8eSBAy8Kk8higAnEmndE7viNy3jpZPRO0_dse7ssGoRLeDbif1YXW3nCo23aDCYC4QkdJV9wi1fyHfPFtaVYXS9lsL5CrcOEEQIhxAWoucZNxIUiEvpEX9COG88uHH9vYhBMla87Pt3oWkaCWo7SJwq6fLS2-mulY5_z0EiahlaJnmymbL5sg-KzXbbAUfMqArAsyvQ61Yn46RFYaRBvHBu4pD1-j650AATW"
 
 export default function Message({ message }) {
   const isUser = message.role === 'user'
-  const avatar = isUser ? USER_AVATAR : MIKE_AVATAR
-  const name = isUser ? 'You' : 'Mike'
+  const avatar = isUser ? USER_AVATAR : BOB_AVATAR
+  const name = isUser ? 'You' : 'Bob'
 
   return (
     <div className={`flex items-end gap-3 group ${isUser ? 'justify-end' : ''}`}>

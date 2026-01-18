@@ -104,7 +104,7 @@ export function useLocalVoice() {
       await navigator.mediaDevices.getUserMedia({ audio: true })
       
       setIsConnected(true)
-      addMessage('assistant', 'Connected! I\'m Mike, your AI assistant. Click the microphone to start speaking, or type your questions.')
+      addMessage('assistant', 'Connected! I\'m Bob, your AI assistant. Click the microphone to start speaking, or type your questions.')
     } catch (error) {
       console.error('Microphone access error:', error)
       addMessage('assistant', 'Could not access microphone. Please allow microphone access and try again.')

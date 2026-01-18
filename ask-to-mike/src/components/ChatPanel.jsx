@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import Message from './Message'
 import Waveform from './Waveform'
 
-const MIKE_AVATAR = "https://lh3.googleusercontent.com/aida-public/AB6AXuCxQqaGItOZji-_GVFAVOolS45cDQxKKSssHrCqioVn_2Qm-xDjmvNbqA9y7ejL7va2QHALxWHdjHcFAKDiDw82DfBVls1Sc9W6kHryrr4t9IaqWSg_-5XLyQdtfweMBsCpVa0VnBviI0vbKNT0VnRJBGuRvT5VukTUr0m6qPsqUWmyWD6S3Du9ySKvhVD-ZK5-yVryLM6f48OT4x-DmX_W7aEObmxVcuOLKWab5PSiJLeu-p6l_U8vjtARZxuIsgzkoE4Ndhtzpt4p"
+const BOB_AVATAR = "https://lh3.googleusercontent.com/aida-public/AB6AXuCxQqaGItOZji-_GVFAVOolS45cDQxKKSssHrCqioVn_2Qm-xDjmvNbqA9y7ejL7va2QHALxWHdjHcFAKDiDw82DfBVls1Sc9W6kHryrr4t9IaqWSg_-5XLyQdtfweMBsCpVa0VnBviI0vbKNT0VnRJBGuRvT5VukTUr0m6qPsqUWmyWD6S3Du9ySKvhVD-ZK5-yVryLM6f48OT4x-DmX_W7aEObmxVcuOLKWab5PSiJLeu-p6l_U8vjtARZxuIsgzkoE4Ndhtzpt4p"
 
 export default function ChatPanel({
   messages,
@@ -65,7 +65,7 @@ export default function ChatPanel({
             )}
           </span>
           <span className="text-xs font-medium text-white/50 uppercase tracking-widest">
-            {isConnected ? 'Mike is Online' : ''}
+            {isConnected ? 'Bob is Online' : ''}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -90,9 +90,9 @@ export default function ChatPanel({
           <div className="flex flex-col items-center justify-center h-full text-center">
             <div 
               className="w-20 h-20 rounded-full bg-cover bg-center mb-6 ring-4 ring-primary/20 shadow-lg shadow-primary/10"
-              style={{ backgroundImage: `url('${MIKE_AVATAR}')` }}
+              style={{ backgroundImage: `url('${BOB_AVATAR}')` }}
             />
-            <h3 className="text-xl font-semibold text-white/90 mb-2">Meet Mike</h3>
+            <h3 className="text-xl font-semibold text-white/90 mb-2">Meet Bob</h3>
             <p className="text-white/50 mb-6 max-w-sm">
               Your advanced AI voice assistant. Click below to start a conversation.
             </p>
@@ -153,7 +153,7 @@ export default function ChatPanel({
                   onChange={(e) => setInputText(e.target.value)}
                   onKeyDown={handleKeyDown}
                   className="w-full bg-transparent border-none text-white placeholder-white/40 focus:ring-0 resize-none py-1 px-3 max-h-[120px] text-base leading-relaxed focus:outline-none"
-                  placeholder={isConnected ? "Yell to Mike..." : "Connect to start yelling..."}
+                  placeholder={isConnected ? "Yell to Bob..." : "Connect to start yelling..."}
                   rows={1}
                   disabled={!isConnected}
                 />
@@ -205,7 +205,7 @@ export default function ChatPanel({
         
         <div className="mt-2 text-center">
           <p className="text-[10px] text-white/30 font-light">
-            Mike can make mistakes. Consider checking important information.
+            Bob can make mistakes. Consider checking important information.
           </p>
         </div>
       </div>

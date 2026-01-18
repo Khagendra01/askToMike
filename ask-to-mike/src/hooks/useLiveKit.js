@@ -36,7 +36,7 @@ export function useLiveKit() {
       const roomName = 'my-room'
       const identity = `user-${Date.now()}`
       
-      addMessage('assistant', 'Connecting to Mike...')
+      addMessage('assistant', 'Connecting to Bob...')
       
       // Get token from backend
       const resp = await fetch(
@@ -109,7 +109,7 @@ export function useLiveKit() {
               addMessage('assistant', text.trim(), true)
             } else if (!isFinal && text.trim()) {
               // Show agent's interim speech
-              setInterimTranscript(`Mike: ${text}`)
+              setInterimTranscript(`Bob: ${text}`)
             }
           } else if (participant?.isLocal) {
             // User's speech transcription
@@ -149,7 +149,7 @@ export function useLiveKit() {
       room.on(RoomEvent.ParticipantConnected, (participant) => {
         console.log(`👤 Participant connected: ${participant.identity}`)
         if (participant.identity.includes('agent')) {
-          addMessage('assistant', "Hi! I'm Mike, your AI assistant. How can I help you today?")
+          addMessage('assistant', "Hi! I'm Bob, your AI assistant. How can I help you today?")
         }
       })
       
