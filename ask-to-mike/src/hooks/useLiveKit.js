@@ -1,8 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { Room, RoomEvent, Track, DataPacket_Kind } from 'livekit-client'
 
-const LIVEKIT_URL = 'wss://del-hecqeidt.livekit.cloud'
-const BACKEND_URL = 'http://localhost:8080'
+const LIVEKIT_URL = 'wss://fdsf-4jf93oez.livekit.cloud'
+const BACKEND_URL = 'http://localhost:8080' 
 
 export function useLiveKit() {
   const [isConnected, setIsConnected] = useState(false)
