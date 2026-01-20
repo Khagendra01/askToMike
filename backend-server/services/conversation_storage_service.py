@@ -11,9 +11,7 @@ from datetime import datetime
 import uuid
 
 import voyageai
-from pymongo import MongoClient
 from pymongo.operations import SearchIndexModel
-from pymongo.errors import ServerSelectionTimeoutError
 
 import sys
 from pathlib import Path
@@ -155,7 +153,7 @@ class ConversationStorageService:
         try:
             coll = self.mongo_service.get_collection(self.collection_name)
             coll.insert_one(doc)
-            print(f"   ✅ Document inserted into MongoDB")
+            print("   ✅ Document inserted into MongoDB")
             print(f"   📝 Embedding dimensions: {len(embedding)}")
             return doc_id
         except Exception as e:
@@ -270,7 +268,7 @@ class ConversationStorageService:
                     # Collection doesn't exist, create it by inserting and deleting a dummy document
                     coll.insert_one({"_id": "temp_init", "temp": True})
                     coll.delete_one({"_id": "temp_init"})
-            except Exception as e:
+            except Exception:
                 # If validation or creation fails, try a simpler approach
                 try:
                     # Just try to insert and delete to ensure collection exists
@@ -299,9 +297,9 @@ class ConversationStorageService:
             except Exception as e:
                 # If list_search_indexes fails, might be M0 tier (not supported via driver)
                 if "command not found" in str(e).lower() or "not supported" in str(e).lower():
-                    print(f"⚠️  Warning: Cannot check index status via driver. Your MongoDB cluster might be M0 (free tier).")
-                    print(f"   M0 clusters require creating the vector search index via MongoDB Atlas UI.")
-                    print(f"   Please create the index manually: Atlas → Data Explorer → Collections → Search Indexes")
+                    print("⚠️  Warning: Cannot check index status via driver. Your MongoDB cluster might be M0 (free tier).")
+                    print("   M0 clusters require creating the vector search index via MongoDB Atlas UI.")
+                    print("   Please create the index manually: Atlas → Data Explorer → Collections → Search Indexes")
                     return False
                 raise
             
@@ -327,7 +325,7 @@ class ConversationStorageService:
             # Create index (async operation)
             try:
                 coll.create_search_index(model=vector_index)
-                print(f"✅ Vector search index creation started (async)")
+                print("✅ Vector search index creation started (async)")
                 
                 if wait_until_ready:
                     return await self._wait_for_index_ready(coll, max_wait_seconds)
@@ -336,15 +334,15 @@ class ConversationStorageService:
             except Exception as e:
                 error_str = str(e).lower()
                 if "command not found" in error_str or "not supported" in error_str:
-                    print(f"❌ Cannot create index via driver. Your MongoDB cluster is likely M0 (free tier).")
-                    print(f"   M0 clusters require creating the vector search index via MongoDB Atlas UI.")
-                    print(f"   Steps:")
-                    print(f"   1. Go to MongoDB Atlas → Data Explorer")
-                    print(f"   2. Select your database and 'conversations' collection")
-                    print(f"   3. Click 'Search Indexes' tab → 'Create Search Index'")
-                    print(f"   4. Use JSON editor with:")
+                    print("❌ Cannot create index via driver. Your MongoDB cluster is likely M0 (free tier).")
+                    print("   M0 clusters require creating the vector search index via MongoDB Atlas UI.")
+                    print("   Steps:")
+                    print("   1. Go to MongoDB Atlas → Data Explorer")
+                    print("   2. Select your database and 'conversations' collection")
+                    print("   3. Click 'Search Indexes' tab → 'Create Search Index'")
+                    print("   4. Use JSON editor with:")
                     print(f'      {{"name": "{self.index_name}", "type": "vectorSearch",')
-                    print(f'       "definition": {{"fields": [{{"type": "vector", "path": "embedding",')
+                    print('       "definition": {"fields": [{"type": "vector", "path": "embedding",')
                     print(f'       "numDimensions": {dims}, "similarity": "cosine"}}]}}}}')
                     return False
                 elif "does not exist" in error_str or "namespacenotfound" in error_str:
@@ -356,7 +354,7 @@ class ConversationStorageService:
                         coll.delete_one({"_id": "force_collection_creation"})
                         # Retry index creation
                         coll.create_search_index(model=vector_index)
-                        print(f"✅ Collection created and vector search index creation started (async)")
+                        print("✅ Collection created and vector search index creation started (async)")
                         if wait_until_ready:
                             return await self._wait_for_index_ready(coll, max_wait_seconds)
                         return True
@@ -381,10 +379,10 @@ class ConversationStorageService:
                 if indexes:
                     status = indexes[0].get("status", "").upper()
                     if status == "READY":
-                        print(f"✅ Vector search index is READY")
+                        print("✅ Vector search index is READY")
                         return True
                     elif status == "FAILED":
-                        print(f"❌ Vector search index creation FAILED")
+                        print("❌ Vector search index creation FAILED")
                         return False
             except Exception:
                 pass

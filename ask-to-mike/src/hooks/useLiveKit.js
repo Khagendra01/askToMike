@@ -2,14 +2,14 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { Room, RoomEvent, Track, DataPacket_Kind } from 'livekit-client'
 
 const LIVEKIT_URL = 'wss://fdsf-4jf93oez.livekit.cloud'
-const BACKEND_URL = 'http://localhost:8080' 
+const BACKEND_URL = 'http://localhost:8080'
 
 export function useLiveKit() {
   const [isConnected, setIsConnected] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [messages, setMessages] = useState([])
   const [interimTranscript, setInterimTranscript] = useState('')
-  
+
   const roomRef = useRef(null)
   const localStreamRef = useRef(null)
   const audioElementsRef = useRef([])
@@ -20,13 +20,13 @@ export function useLiveKit() {
       setInterimTranscript(content)
       return
     }
-    
+
     // Clear interim transcript
     setInterimTranscript('')
-    
-    const timestamp = new Date().toLocaleTimeString([], { 
-      hour: '2-digit', 
-      minute: '2-digit' 
+
+    const timestamp = new Date().toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
     })
     setMessages(prev => [...prev, { role, content, timestamp }])
   }, [])
@@ -35,20 +35,20 @@ export function useLiveKit() {
     try {
       const roomName = 'my-room'
       const identity = `user-${Date.now()}`
-      
+
       addMessage('assistant', 'Connecting to Bob...')
-      
+
       // Get token from backend
       const resp = await fetch(
         `${BACKEND_URL}/api/token?room=${roomName}&identity=${identity}`
       )
-      
+
       if (!resp.ok) {
         throw new Error(`Failed to get token: ${resp.status}`)
       }
-      
+
       const { token } = await resp.json()
-      
+
       // Create and configure room
       const room = new Room({
         // Enable adaptive streaming for better audio quality
@@ -56,13 +56,13 @@ export function useLiveKit() {
         dynacast: true,
       })
       roomRef.current = room
-      
+
       // Handle room connection
       room.on(RoomEvent.Connected, () => {
         console.log('✅ Connected to LiveKit room')
         setIsConnected(true)
       })
-      
+
       room.on(RoomEvent.Disconnected, () => {
         console.log('🔌 Disconnected from LiveKit room')
         setIsConnected(false)
@@ -70,7 +70,7 @@ export function useLiveKit() {
         setInterimTranscript('')
         addMessage('assistant', 'Disconnected from the session.')
       })
-      
+
       // Handle remote audio tracks (agent's voice)
       room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
         console.log(`📡 Track subscribed: ${track.kind} from ${participant.identity}`)
@@ -82,27 +82,27 @@ export function useLiveKit() {
           el.play().catch(console.error)
         }
       })
-      
-      room.on(RoomEvent.TrackUnsubscribed, (track, publication) => {
+
+      room.on(RoomEvent.TrackUnsubscribed, (track) => {
         console.log(`📡 Track unsubscribed: ${track.kind}`)
         track.detach().forEach(el => {
           el.remove()
           audioElementsRef.current = audioElementsRef.current.filter(e => e !== el)
         })
       })
-      
+
       // Handle transcription events from the agent
       // LiveKit agents send transcription updates via the transcription event
       room.on(RoomEvent.TranscriptionReceived, (segments, participant) => {
         console.log('📝 Transcription received:', segments, 'from:', participant?.identity)
-        
+
         segments.forEach((segment) => {
           const text = segment.text
           const isFinal = segment.final
-          const isAgent = participant?.identity?.includes('agent') || 
-                         participant?.identity === 'assistant' ||
-                         !participant?.isLocal
-          
+          const isAgent = participant?.identity?.includes('agent') ||
+            participant?.identity === 'assistant' ||
+            !participant?.isLocal
+
           if (isAgent) {
             // Agent's response
             if (isFinal && text.trim()) {
@@ -122,14 +122,14 @@ export function useLiveKit() {
           }
         })
       })
-      
+
       // Handle data messages (for any JSON data from agent)
-      room.on(RoomEvent.DataReceived, (payload, participant, kind) => {
+      room.on(RoomEvent.DataReceived, (payload, participant) => {
         try {
           const decoder = new TextDecoder()
           const data = JSON.parse(decoder.decode(payload))
           console.log('📨 Data received:', data, 'from:', participant?.identity)
-          
+
           // Handle different message types
           if (data.type === 'transcription') {
             if (data.role === 'user') {
@@ -140,38 +140,38 @@ export function useLiveKit() {
           } else if (data.type === 'agent_response') {
             addMessage('assistant', data.text)
           }
-        } catch (e) {
+        } catch {
           // Not JSON, might be raw text
           console.log('📨 Raw data received:', payload)
         }
       })
-      
+
       room.on(RoomEvent.ParticipantConnected, (participant) => {
         console.log(`👤 Participant connected: ${participant.identity}`)
         if (participant.identity.includes('agent')) {
           addMessage('assistant', "Hi! I'm Bob, your AI assistant. How can I help you today?")
         }
       })
-      
+
       room.on(RoomEvent.ParticipantDisconnected, (participant) => {
         console.log(`👤 Participant disconnected: ${participant.identity}`)
       })
-      
+
       // Handle errors
       room.on(RoomEvent.MediaDevicesError, (error) => {
         console.error('🎤 Media device error:', error)
         addMessage('assistant', `Microphone error: ${error.message}`)
       })
-      
+
       room.on(RoomEvent.ConnectionQualityChanged, (quality, participant) => {
         console.log(`📶 Connection quality: ${quality} for ${participant.identity}`)
       })
-      
+
       // Connect to LiveKit
       console.log('🔗 Connecting to LiveKit...')
       await room.connect(LIVEKIT_URL, token)
       console.log('✅ Room connected, preparing microphone...')
-      
+
       // Request microphone access
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -180,20 +180,20 @@ export function useLiveKit() {
           autoGainControl: true
         }
       })
-      
+
       localStreamRef.current = stream
       const audioTrack = stream.getAudioTracks()[0]
-      
+
       // Publish microphone track
       console.log('🎤 Publishing microphone track...')
       await room.localParticipant.publishTrack(audioTrack, {
         name: 'mic',
         source: Track.Source.Microphone
       })
-      
+
       console.log('✅ Microphone published, ready to record')
       setIsRecording(true)
-      
+
     } catch (error) {
       console.error('❌ Connection error:', error)
       addMessage('assistant', `Connection failed: ${error.message}`)
@@ -209,17 +209,17 @@ export function useLiveKit() {
         localStreamRef.current.getTracks().forEach(track => track.stop())
         localStreamRef.current = null
       }
-      
+
       // Remove audio elements
       audioElementsRef.current.forEach(el => el.remove())
       audioElementsRef.current = []
-      
+
       // Disconnect from room
       if (roomRef.current) {
         await roomRef.current.disconnect()
         roomRef.current = null
       }
-      
+
       setIsConnected(false)
       setIsRecording(false)
       setInterimTranscript('')
@@ -230,12 +230,12 @@ export function useLiveKit() {
 
   const toggleVoice = useCallback(async () => {
     if (!roomRef.current || !localStreamRef.current) return
-    
+
     const audioTrack = localStreamRef.current.getAudioTracks()[0]
     if (audioTrack) {
       audioTrack.enabled = !audioTrack.enabled
       setIsRecording(audioTrack.enabled)
-      
+
       if (audioTrack.enabled) {
         setInterimTranscript('')
       }
@@ -245,7 +245,7 @@ export function useLiveKit() {
   const sendMessage = useCallback(async (content) => {
     // Add user message to chat
     addMessage('user', content)
-    
+
     // Send text message via data channel if connected
     if (roomRef.current && isConnected) {
       try {

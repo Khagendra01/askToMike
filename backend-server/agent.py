@@ -13,7 +13,6 @@ from datetime import datetime
 
 from livekit.agents import AgentSession, JobContext, inference, llm, Agent, function_tool, RunContext
 from livekit.plugins import elevenlabs
-from livekit.agents import stt
 from livekit.agents import tts as livekit_tts
 
 import sys
@@ -31,17 +30,13 @@ from agents.agent_router import AgentRouter
 from workflows.linkedin_workflow import LinkedInWorkflowRunner
 from services.arize_tracing import (
     init_arize_tracing,
-    is_arize_enabled,
-    trace_livekit_session,
     trace_conversation_turn,
     trace_tool_call,
     trace_workflow,
-    record_livekit_metrics,
     record_error,
 )
 from utils.logger import (
-    get_logger, get_agent_logger, get_router_logger, 
-    log_agent_switch, log_tool_call,
+    get_logger, get_agent_logger, log_agent_switch, log_tool_call,
     setup_logging
 )
 
@@ -408,7 +403,7 @@ async def entrypoint(ctx: JobContext):
                         post_content = self._linkedin_workflow.get_post_content()
                         image_desc = self._linkedin_workflow.get_image_description()
                         
-                        logger.info(f"✅ LinkedIn workflow confirmed! Executing post...")
+                        logger.info("✅ LinkedIn workflow confirmed! Executing post...")
                         
                         # Execute the actual LinkedIn post
                         if self._router:
@@ -449,7 +444,7 @@ async def entrypoint(ctx: JobContext):
             if not self._linkedin_workflow:
                 return "No active LinkedIn draft workflow."
             
-            status = f"LinkedIn Draft Workflow Status:\n"
+            status = "LinkedIn Draft Workflow Status:\n"
             status += f"  Stage: {self._linkedin_workflow.current_stage}\n"
             status += f"  Complete: {self._linkedin_workflow.is_complete}\n"
             status += f"  Confirmed: {self._linkedin_workflow.is_confirmed}\n"
@@ -659,7 +654,7 @@ async def entrypoint(ctx: JobContext):
                     try:
                         dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
                         start_str = dt.strftime('%Y-%m-%d %I:%M %p')
-                    except:
+                    except Exception:
                         start_str = start
                     
                     result += f"{i}. {summary}\n"
@@ -671,7 +666,7 @@ async def entrypoint(ctx: JobContext):
                     result += "\n"
                 
                 return result
-            except FileNotFoundError as e:
+            except FileNotFoundError:
                 return "Calendar service is not configured. Please check credentials file."
             except Exception as e:
                 logger.error(f"❌ Calendar error: {e}", exc_info=True)
@@ -833,7 +828,7 @@ async def entrypoint(ctx: JobContext):
                 event_link = event.get('htmlLink', '')
                 
                 return f"✅ Created calendar event: '{title}' on {start.strftime('%Y-%m-%d at %I:%M %p')}. {f'Link: {event_link}' if event_link else ''}"
-            except FileNotFoundError as e:
+            except FileNotFoundError:
                 return "Calendar service is not configured. Please check credentials file."
             except Exception as e:
                 logger.error(f"❌ Calendar error: {e}", exc_info=True)
@@ -914,15 +909,15 @@ async def entrypoint(ctx: JobContext):
                 if not agent_types:
                     agent_types = ["basic"]
                 
-                logger.info(f"📊 Conversation Summary:")
+                logger.info("📊 Conversation Summary:")
                 logger.info(f"   Session ID: {session_id}")
                 logger.info(f"   Room: {room_name}")
                 logger.info(f"   Total Messages: {len(all_messages)}")
                 logger.info(f"   - User messages: {user_count}")
                 logger.info(f"   - Assistant messages: {assistant_count}")
                 logger.info(f"   Agent types used: {', '.join(agent_types)}")
-                logger.info(f"")
-                logger.info(f"🔄 Generating embeddings and saving to MongoDB...")
+                logger.info("")
+                logger.info("🔄 Generating embeddings and saving to MongoDB...")
                 
                 doc_id = await conversation_storage.save_conversation(
                     session_id=session_id,
@@ -936,10 +931,10 @@ async def entrypoint(ctx: JobContext):
                 )
                 
                 logger.info("=" * 60)
-                logger.info(f"✅ CONVERSATION SAVED SUCCESSFULLY!")
+                logger.info("✅ CONVERSATION SAVED SUCCESSFULLY!")
                 logger.info(f"   MongoDB Document ID: {doc_id}")
-                logger.info(f"   Collection: conversations")
-                logger.info(f"   Ready for vector search retrieval")
+                logger.info("   Collection: conversations")
+                logger.info("   Ready for vector search retrieval")
                 logger.info("=" * 60)
             else:
                 logger.info("=" * 60)
@@ -948,7 +943,7 @@ async def entrypoint(ctx: JobContext):
                 logger.info("=" * 60)
         except Exception as e:
             logger.error("=" * 60)
-            logger.error(f"❌ FAILED TO SAVE CONVERSATION")
+            logger.error("❌ FAILED TO SAVE CONVERSATION")
             logger.error(f"   Error: {e}")
             logger.error("=" * 60)
             logger.error(f"❌ Failed to save conversation: {e}", exc_info=True)
@@ -982,7 +977,7 @@ async def entrypoint(ctx: JobContext):
                 return
             except asyncio.CancelledError:
                 return
-            except Exception as e:
+            except Exception:
                 if attempt < max_retries - 1:
                     wait_time = (attempt + 1) * 0.3  # Reduced retry delay
                     logger.warning(f"⚠️ Greeting attempt {attempt + 1} failed, retrying in {wait_time}s...")

@@ -10,7 +10,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from livekit.agents import Agent, llm, function_tool, RunContext
-from config import Config
 from utils.logger import get_agent_logger, log_tool_call
 
 logger = get_agent_logger("basic")

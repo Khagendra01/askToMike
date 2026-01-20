@@ -12,7 +12,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from livekit.agents import Agent, llm, function_tool, RunContext
-from config import Config
 from utils.logger import get_agent_logger, log_tool_call
 
 logger = get_agent_logger("x")
@@ -60,7 +59,7 @@ class XAgent(Agent):
                 if image_url:
                     logger.info(f"✅ Image generated: {image_url[:80]}...")
                 else:
-                    logger.warning(f"⚠️ Image generation failed")
+                    logger.warning("⚠️ Image generation failed")
             except Exception as e:
                 logger.warning(f"⚠️ Image generation error: {e}")
         
@@ -75,7 +74,7 @@ class XAgent(Agent):
                     "timestamp": asyncio.get_event_loop().time()
                 }
                 await self._redis_service.push_task(task)
-                logger.info(f"✅ Queued X/Twitter post" + (" with image" if image_url else ""))
+                logger.info("✅ Queued X/Twitter post" + (" with image" if image_url else ""))
                 return None, f"✅ Done! I've queued your X/Twitter post{' with image' if image_url else ''}. It will be posted shortly."
             except Exception as e:
                 logger.warning(f"⚠️ Redis not available, post not queued: {e}")

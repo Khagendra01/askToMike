@@ -7,7 +7,6 @@ Provides structured logging with different loggers for different components.
 
 import logging
 import sys
-from datetime import datetime
 from typing import Optional
 
 # Track if logging has been set up to prevent duplicate handlers

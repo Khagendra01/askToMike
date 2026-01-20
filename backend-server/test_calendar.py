@@ -53,7 +53,7 @@ async def test_calendar():
             description="This is a test event created by the calendar integration test."
         )
         
-        print(f"   ✅ Event created successfully!")
+        print("   ✅ Event created successfully!")
         print(f"   Event ID: {created_event.get('id')}")
         print(f"   Link: {created_event.get('htmlLink', 'N/A')}")
         

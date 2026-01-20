@@ -45,12 +45,12 @@ def test_elevenlabs_import():
     
     try:
         import elevenlabs
-        print(f"✅ elevenlabs package imported successfully")
+        print("✅ elevenlabs package imported successfully")
         if hasattr(elevenlabs, '__version__'):
             print(f"   Version: {elevenlabs.__version__}")
         return True
     except ImportError as e:
-        print(f"⚠️  elevenlabs package not installed (not required for LiveKit plugin)")
+        print("⚠️  elevenlabs package not installed (not required for LiveKit plugin)")
         print(f"   Error: {e}")
         return True  # Not a blocker - LiveKit plugin works without it
 
@@ -66,10 +66,10 @@ def test_livekit_elevenlabs_plugin():
         import importlib.util
         spec = importlib.util.find_spec("livekit.plugins.elevenlabs")
         if spec:
-            print(f"✅ livekit-plugins-elevenlabs is installed")
+            print("✅ livekit-plugins-elevenlabs is installed")
             return True
         else:
-            print(f"❌ livekit-plugins-elevenlabs not found")
+            print("❌ livekit-plugins-elevenlabs not found")
             return False
     except Exception as e:
         print(f"⚠️  Could not check plugin: {e}")
@@ -101,18 +101,18 @@ async def test_elevenlabs_api_connection():
             if response.status_code == 200:
                 data = response.json()
                 voices = data.get("voices", [])
-                print(f"✅ API connection successful!")
+                print("✅ API connection successful!")
                 print(f"   Available voices: {len(voices)}")
                 if voices:
                     print(f"   First voice: {voices[0].get('name', 'Unknown')}")
                 return True
             elif response.status_code == 401:
-                print(f"❌ API returned 401 Unauthorized")
+                print("❌ API returned 401 Unauthorized")
                 print("   Your API key is invalid or expired")
                 print("   Get a new key at: https://elevenlabs.io/app/settings/api-keys")
                 return False
             elif response.status_code == 429:
-                print(f"❌ API returned 429 Too Many Requests")
+                print("❌ API returned 429 Too Many Requests")
                 print("   You've exceeded your rate limit or quota")
                 return False
             else:
@@ -166,20 +166,20 @@ async def test_elevenlabs_tts_synthesis():
             
             if response.status_code == 200:
                 audio_size = len(response.content)
-                print(f"✅ TTS synthesis successful!")
+                print("✅ TTS synthesis successful!")
                 print(f"   Audio size: {audio_size} bytes")
                 
                 # Optionally save the audio
                 with open("test_audio.mp3", "wb") as f:
                     f.write(response.content)
-                print(f"   Saved to: test_audio.mp3")
+                print("   Saved to: test_audio.mp3")
                 return True
             elif response.status_code == 401:
-                print(f"❌ TTS returned 401 Unauthorized")
+                print("❌ TTS returned 401 Unauthorized")
                 print("   Your API key is invalid")
                 return False
             elif response.status_code == 422:
-                print(f"❌ TTS returned 422 - Invalid request")
+                print("❌ TTS returned 422 - Invalid request")
                 error_detail = response.json() if response.headers.get("content-type", "").startswith("application/json") else response.text
                 print(f"   Error: {error_detail}")
                 return False
@@ -213,7 +213,7 @@ async def test_elevenlabs_websocket():
         
         uri = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?model_id={model_id}"
         
-        print(f"   Connecting to WebSocket...")
+        print("   Connecting to WebSocket...")
         
         async with websockets.connect(
             uri,
@@ -253,7 +253,7 @@ async def test_elevenlabs_websocket():
                         break
             except websockets.exceptions.ConnectionClosed as e:
                 if audio_chunks:
-                    print(f"✅ WebSocket streaming works!")
+                    print("✅ WebSocket streaming works!")
                     print(f"   Received {len(audio_chunks)} audio chunks")
                     return True
                 else:
@@ -262,11 +262,11 @@ async def test_elevenlabs_websocket():
                     return False
             
             if audio_chunks:
-                print(f"✅ WebSocket streaming successful!")
+                print("✅ WebSocket streaming successful!")
                 print(f"   Received {len(audio_chunks)} audio chunks")
                 return True
             else:
-                print(f"❌ No audio received from WebSocket")
+                print("❌ No audio received from WebSocket")
                 return False
                 
     except websockets.exceptions.InvalidStatusCode as e:
@@ -310,7 +310,7 @@ async def test_quota_status():
                 char_count = data.get("character_count", 0)
                 char_limit = data.get("character_limit", 0)
                 
-                print(f"✅ Account info retrieved!")
+                print("✅ Account info retrieved!")
                 print(f"   Tier: {tier}")
                 print(f"   Characters used: {char_count:,} / {char_limit:,}")
                 
@@ -326,7 +326,7 @@ async def test_quota_status():
                 
                 return True
             elif response.status_code == 401:
-                print(f"❌ API returned 401 - Invalid API key")
+                print("❌ API returned 401 - Invalid API key")
                 return False
             else:
                 print(f"❌ API returned status {response.status_code}")

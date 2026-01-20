@@ -10,7 +10,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from livekit.agents import inference, llm, Agent
-from typing import Optional, Dict, Any
 from agents.basic_agent import BasicAgent
 from agents.linkedin_agent import LinkedInAgent
 from agents.slack_agent import SlackAgent

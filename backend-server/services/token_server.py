@@ -105,7 +105,7 @@ class TokenServer:
                     agent_name="",
                 )
             )
-        except Exception as e:
+        except Exception:
             # Remove from set so retry is possible
             self._dispatched_rooms.discard(room_name)
     

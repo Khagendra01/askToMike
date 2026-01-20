@@ -14,7 +14,6 @@ multi-step LinkedIn posting interactions.
 import os
 import asyncio
 from typing import TypedDict, Optional, Literal, Annotated
-from datetime import datetime
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
@@ -163,7 +162,7 @@ async def review_draft(state: LinkedInWorkflowState) -> LinkedInWorkflowState:
     Handle user's review of the draft.
     Parse user feedback and determine next action.
     """
-    logger.info(f"🔍 Processing user review...")
+    logger.info("🔍 Processing user review...")
     
     # Get the last user message
     user_messages = [m for m in state["messages"] if isinstance(m, HumanMessage)]
@@ -277,7 +276,7 @@ async def handle_image_request(state: LinkedInWorkflowState) -> LinkedInWorkflow
     """
     Handle image description from user.
     """
-    logger.info(f"🖼️ Processing image request...")
+    logger.info("🖼️ Processing image request...")
     
     # Get the last user message as image description
     user_messages = [m for m in state["messages"] if isinstance(m, HumanMessage)]
@@ -338,14 +337,14 @@ async def execute_post(state: LinkedInWorkflowState) -> LinkedInWorkflowState:
     This node is called when user confirms.
     Note: Actual posting is done by the calling agent via Redis queue.
     """
-    logger.info(f"🚀 Post confirmed! Ready for execution.")
+    logger.info("🚀 Post confirmed! Ready for execution.")
     
     # Trace this workflow node
     with trace_workflow_node("execute_post", "linkedin", stage="posting", metadata={
         "post_length": len(state.get('draft_content', '')),
         "has_image": state.get('image_description') is not None
     }):
-        result_msg = f"✅ Your LinkedIn post is ready to be published!"
+        result_msg = "✅ Your LinkedIn post is ready to be published!"
         if state.get("image_description"):
             result_msg += f"\n\n📝 Post: {state['draft_content'][:100]}...\n🖼️ Image: {state['image_description']}"
         else:

@@ -5,8 +5,8 @@ Uses hardcoded service account credentials for solo testing.
 """
 
 import asyncio
-from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from datetime import datetime
+from typing import List, Dict, Any
 from pathlib import Path
 
 from google.oauth2 import service_account

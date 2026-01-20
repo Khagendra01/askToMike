@@ -13,7 +13,7 @@ async function main() {
 
   // Check API keys
   const googleApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY;
-  
+
   console.log("🔑 API Key check:");
   console.log(`   GOOGLE_GENERATIVE_AI_API_KEY: ${process.env.GOOGLE_GENERATIVE_AI_API_KEY ? "✅ Set" : "❌ Not set"}`);
   console.log(`   GEMINI_API_KEY: ${process.env.GEMINI_API_KEY ? "✅ Set" : "❌ Not set"}`);
@@ -28,7 +28,7 @@ async function main() {
 
   // Initialize Stagehand
   console.log("\n📦 Initializing Stagehand...");
-  
+
   const stagehand = new Stagehand({
     env: "LOCAL",
     localBrowserLaunchOptions: {
@@ -59,7 +59,7 @@ async function main() {
 
     // Test 1: Create CUA agent with the exact config from linkedin_comment.ts
     console.log("\n🤖 Test 1: Creating CUA agent with gemini-2.5-computer-use-preview-10-2025...");
-    
+
     try {
       const cuaAgent = stagehand.agent({
         mode: "cua",
@@ -80,8 +80,8 @@ async function main() {
       });
 
       console.log(`   Result success: ${result.success}`);
-      console.log(`   Steps taken: ${result.steps?.length || 0}`);
-      
+      console.log(`   Steps taken: ${(result as any).steps?.length || 0}`);
+
       if (result.success) {
         console.log("   ✅ CUA agent executed successfully!");
       } else {
@@ -98,7 +98,7 @@ async function main() {
 
     // Test 2: Try with a different model (gemini-2.0-flash-exp)
     console.log("\n🤖 Test 2: Creating CUA agent with gemini-2.0-flash-exp...");
-    
+
     try {
       // Navigate back to example.com
       await page.goto("https://example.com", { waitUntil: "domcontentloaded" });
@@ -121,7 +121,7 @@ async function main() {
       });
 
       console.log(`   Result success: ${result2.success}`);
-      
+
       if (result2.success) {
         console.log("   ✅ CUA agent with gemini-2.0-flash-exp executed successfully!");
       } else {
@@ -134,7 +134,7 @@ async function main() {
 
     // Test 3: Try stagehand.act() instead of agent
     console.log("\n🤖 Test 3: Using stagehand.act() directly...");
-    
+
     try {
       await page.goto("https://example.com", { waitUntil: "domcontentloaded" });
       await new Promise((resolve) => setTimeout(resolve, 1000));

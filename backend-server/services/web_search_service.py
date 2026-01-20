@@ -6,7 +6,7 @@ Handles web search using various providers (DuckDuckGo, Tavily, etc.).
 
 import os
 import aiohttp
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 import sys
 from pathlib import Path
 

@@ -11,7 +11,7 @@ Provides full observability for the voice agent including:
 
 import os
 import logging
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 from contextlib import contextmanager
 from functools import wraps
 
@@ -117,7 +117,7 @@ def init_arize_tracing(project_name: str = "delegate-voice-agent") -> bool:
             logger.info("=" * 60)
             logger.info("✅ ARIZE AX TRACING ENABLED (HTTP/OTLP)")
             logger.info(f"   Project: {project_name}")
-            logger.info(f"   Endpoint: https://otlp.arize.com/v1/traces")
+            logger.info("   Endpoint: https://otlp.arize.com/v1/traces")
             logger.info("   Features:")
             logger.info("   - LangGraph/LangChain auto-instrumentation")
             logger.info("   - Custom workflow spans")

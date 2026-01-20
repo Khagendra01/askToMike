@@ -10,14 +10,14 @@ export function useLocalVoice() {
   const [isRecording, setIsRecording] = useState(false)
   const [messages, setMessages] = useState([])
   const [interimTranscript, setInterimTranscript] = useState('')
-  
+
   const recognitionRef = useRef(null)
   const isListeningRef = useRef(false)
 
   const addMessage = useCallback((role, content) => {
-    const timestamp = new Date().toLocaleTimeString([], { 
-      hour: '2-digit', 
-      minute: '2-digit' 
+    const timestamp = new Date().toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
     })
     setMessages(prev => [...prev, { role, content, timestamp }])
   }, [])
@@ -25,7 +25,7 @@ export function useLocalVoice() {
   // Initialize speech recognition
   const initRecognition = useCallback(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-    
+
     if (!SpeechRecognition) {
       console.error('Speech recognition not supported')
       addMessage('assistant', 'Sorry, your browser doesn\'t support speech recognition. Please use Chrome or Edge.')
@@ -76,7 +76,7 @@ export function useLocalVoice() {
       if (isListeningRef.current && recognitionRef.current) {
         try {
           recognitionRef.current.start()
-        } catch (e) {
+        } catch {
           // Already started, ignore
         }
       } else {
@@ -102,7 +102,7 @@ export function useLocalVoice() {
     try {
       // Request microphone permission first
       await navigator.mediaDevices.getUserMedia({ audio: true })
-      
+
       setIsConnected(true)
       addMessage('assistant', 'Connected! I\'m Bob, your AI assistant. Click the microphone to start speaking, or type your questions.')
     } catch (error) {
@@ -117,7 +117,7 @@ export function useLocalVoice() {
       recognitionRef.current.stop()
       recognitionRef.current = null
     }
-    
+
     setIsConnected(false)
     setIsRecording(false)
     setInterimTranscript('')
@@ -140,7 +140,7 @@ export function useLocalVoice() {
       if (!recognitionRef.current) {
         recognitionRef.current = initRecognition()
       }
-      
+
       if (recognitionRef.current) {
         try {
           isListeningRef.current = true
@@ -162,7 +162,7 @@ export function useLocalVoice() {
 
   const sendMessage = useCallback((content) => {
     addMessage('user', content)
-    
+
     // TODO: Hook up to backend here
     // For now, just echo back for testing
     setTimeout(() => {

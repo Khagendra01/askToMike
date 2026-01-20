@@ -12,7 +12,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from livekit.agents import Agent, llm, function_tool, RunContext
-from config import Config
 from utils.logger import get_agent_logger, log_tool_call
 
 logger = get_agent_logger("linkedin")
@@ -65,7 +64,7 @@ class LinkedInAgent(Agent):
             # Check for duplicate content
             is_duplicate = await self._shared_state.check_linkedin_duplicate(post_content, window_seconds=60)
             if is_duplicate:
-                logger.warning(f"🔄 LinkedIn post blocked - duplicate content detected")
+                logger.warning("🔄 LinkedIn post blocked - duplicate content detected")
                 return None, "🔄 This post appears to be a duplicate of a recent submission. Your previous post is being processed."
         
         # Generate image if description provided
@@ -77,7 +76,7 @@ class LinkedInAgent(Agent):
                 if image_url:
                     logger.info(f"✅ Image generated: {image_url[:80]}...")
                 else:
-                    logger.warning(f"⚠️ Image generation failed")
+                    logger.warning("⚠️ Image generation failed")
             except Exception as e:
                 logger.warning(f"⚠️ Image generation error: {e}")
         
@@ -96,9 +95,9 @@ class LinkedInAgent(Agent):
                 # Set cooldown AFTER successful queue
                 if self._shared_state:
                     await self._shared_state.set_linkedin_cooldown()
-                    logger.info(f"⏱️ LinkedIn cooldown started (30s)")
+                    logger.info("⏱️ LinkedIn cooldown started (30s)")
                 
-                logger.info(f"✅ Queued LinkedIn post" + (" with image" if image_url else ""))
+                logger.info("✅ Queued LinkedIn post" + (" with image" if image_url else ""))
                 return None, f"✅ Done! I've queued your LinkedIn post{' with image' if image_url else ''}. It will be posted shortly."
             except Exception as e:
                 logger.warning(f"⚠️ Redis not available, post not queued: {e}")

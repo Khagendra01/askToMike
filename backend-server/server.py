@@ -16,7 +16,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Setup logging before importing other modules
-import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from utils.logger import setup_logging

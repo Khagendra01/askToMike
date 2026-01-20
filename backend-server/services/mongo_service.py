@@ -4,7 +4,7 @@ MongoDB Service
 Manages MongoDB connection and database operations.
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Any
 from pymongo import MongoClient
 from pymongo.database import Database
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
